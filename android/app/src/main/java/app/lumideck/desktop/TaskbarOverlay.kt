@@ -88,10 +88,18 @@ class TaskbarOverlay(
         }
         hideSystemBars(taskbar)
         hideSystemBars(menu)
+        // A new display gets its navigation bar a moment after the desktop starts, and the
+        // taskbar's window has to grow by the bar's height then, or the taskbar ends up
+        // drawn outside it.
+        activity.window.decorView.setOnApplyWindowInsetsListener { view, insets ->
+            handler.post(::refitTaskbar)
+            view.onApplyWindowInsets(insets)
+        }
         return true
     }
 
     fun hide() {
+        activity.window.decorView.setOnApplyWindowInsetsListener(null)
         taskbar?.let(windowManager::removeView)
         menu?.let(windowManager::removeView)
         taskbar = null
@@ -143,6 +151,16 @@ class TaskbarOverlay(
         if (height == taskbarHeight) return
         taskbarHeight = height
         taskbar?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, taskbarParams()) }
+        onTaskbarResize()
+    }
+
+    /** Fits the taskbar's window again if the navigation bar's height changed. */
+    private fun refitTaskbar() {
+        val taskbar = taskbar ?: return
+        val before = taskbarWindowHeight
+        val params = taskbarParams()
+        if (taskbarWindowHeight == before || !taskbar.isAttachedToWindow) return
+        windowManager.updateViewLayout(taskbar, params)
         onTaskbarResize()
     }
 
