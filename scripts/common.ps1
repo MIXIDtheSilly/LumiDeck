@@ -36,6 +36,14 @@ function Select-LumiDevice([string]$Serial) {
     return $devices[0].Serial
 }
 
+# Starts the window helper, which lets the taskbar list, focus, minimise, maximise and close
+# app windows (android/app/src/main/java/app/lumideck/helper/WindowHelper.kt). It runs from
+# LumiDeck's APK as ADB's shell user and keeps running after the PC disconnects, until the
+# device reboots. Starting it again replaces the running one.
+function Start-WindowHelper([string]$Serial) {
+    adb -s $Serial shell "CLASSPATH=`$(pm path $LumiPackage | head -n 1 | cut -d: -f2) nohup app_process / $LumiPackage.helper.WindowHelper >/dev/null 2>&1 &"
+}
+
 # Gradle and the SDK tools want a JDK they know; Android Studio ships one.
 function Use-AndroidStudioJdk {
     $jbr = Join-Path $env:ProgramFiles 'Android\Android Studio\jbr'

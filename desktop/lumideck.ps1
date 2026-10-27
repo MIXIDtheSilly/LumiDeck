@@ -38,6 +38,9 @@ if ($homeRole -and $homeRole.Context.PostContext -match "holders=$LumiPackage") 
 # setup-device.ps1; repeated here for installs made before the taskbar needed it.
 adb -s $serial shell appops set $LumiPackage SYSTEM_ALERT_WINDOW allow | Out-Null
 
+# Running apps in the taskbar.
+Start-WindowHelper $serial
+
 $env:SCRCPY_ICON_DIR = Join-Path $PSScriptRoot 'icons'
 
 # Android draws its own navigation bar along the bottom of the desktop and forces it on

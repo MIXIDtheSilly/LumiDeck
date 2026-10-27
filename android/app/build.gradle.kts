@@ -22,7 +22,7 @@ android {
         release {
             isMinifyEnabled = true
             isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
             signingConfig = signingConfigs.getByName("debug")
         }
     }
@@ -34,6 +34,8 @@ android {
 
     buildFeatures {
         compose = true
+        // The window helper's interface (src/main/aidl).
+        aidl = true
     }
 }
 

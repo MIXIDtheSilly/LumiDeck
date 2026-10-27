@@ -15,18 +15,19 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import app.lumideck.desktop.DesktopScreen
+import app.lumideck.desktop.DesktopState
 import app.lumideck.desktop.MenuLayer
 import app.lumideck.desktop.MetaTap
 import app.lumideck.desktop.TaskbarLayer
 import app.lumideck.desktop.TaskbarOverlay
-import app.lumideck.desktop.WindowPlacer
+import app.lumideck.desktop.Windows
 import app.lumideck.ui.LumiTheme
 
 /** The desktop shown on an external monitor or on the virtual display streamed to a PC. */
 class DesktopActivity : ComponentActivity() {
-    private val menuOpen = mutableStateOf(false)
-    private val windows = WindowPlacer(this)
-    private val overlay = TaskbarOverlay(this, onMetaTap = ::onMetaTap, onBack = { menuOpen.value = false })
+    private val state = DesktopState()
+    private val windows = Windows(this)
+    private val overlay = TaskbarOverlay(this, onMetaTap = ::onMetaTap, onBack = state::closeMenus)
     private val overlayShown = mutableStateOf(false)
     private val metaTap = MetaTap(::onMetaTap)
     private var lastMetaTap = 0L
@@ -41,21 +42,16 @@ class DesktopActivity : ComponentActivity() {
         )
         super.onCreate(savedInstanceState)
 
-        // Back never leaves the desktop; it only closes the menu.
+        // Back never leaves the desktop; it only closes the menus.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                menuOpen.value = false
+                state.closeMenus()
             }
         })
 
         setContent {
             LumiTheme {
-                DesktopScreen(
-                    showShell = !overlayShown.value,
-                    menuOpen = menuOpen.value,
-                    onMenuOpenChange = { menuOpen.value = it },
-                    onLaunch = windows::launch,
-                )
+                DesktopScreen(showShell = !overlayShown.value, state = state, windows = windows)
             }
         }
 
@@ -69,16 +65,8 @@ class DesktopActivity : ComponentActivity() {
         super.onResume()
         // Also picks up "Display over other apps" being allowed while the desktop was open.
         overlayShown.value = overlay.show(
-            taskbarContent = {
-                LumiTheme {
-                    TaskbarLayer(menuOpen.value, { menuOpen.value = it }, windows::launch)
-                }
-            },
-            menuContent = { onShownChange ->
-                LumiTheme {
-                    MenuLayer(menuOpen.value, { menuOpen.value = it }, windows::launch, onShownChange)
-                }
-            },
+            taskbarContent = { LumiTheme { TaskbarLayer(state, windows) } },
+            menuContent = { onShownChange -> LumiTheme { MenuLayer(state, windows, onShownChange) } },
         )
     }
 
@@ -90,7 +78,7 @@ class DesktopActivity : ComponentActivity() {
     /** Home pressed while the desktop is already showing. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        menuOpen.value = false
+        state.closeMenus()
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean =
@@ -104,6 +92,6 @@ class DesktopActivity : ComponentActivity() {
         val now = SystemClock.uptimeMillis()
         if (now - lastMetaTap < 300) return
         lastMetaTap = now
-        menuOpen.value = !menuOpen.value
+        state.toggleMenu()
     }
 }

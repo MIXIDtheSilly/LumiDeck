@@ -54,6 +54,11 @@ Invoke-Adb shell cmd role add-role-holder android.app.role.HOME $LumiPackage | O
 Invoke-Adb shell am start -n "$LumiPackage/.HomeActivity" -a android.intent.action.MAIN -c android.intent.category.LAUNCHER | Out-Null
 Write-Host 'On the device: pick your normal launcher under "Launcher on this screen".'
 
+if (-not $Reboot) {
+    Write-Host 'Starting the window helper (running apps in the taskbar)...'
+    Start-WindowHelper $serial
+}
+
 if ($Reboot) {
     Write-Host 'Rebooting...'
     Invoke-Adb reboot

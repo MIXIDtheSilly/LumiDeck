@@ -72,5 +72,15 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!--
+            Where the window helper (helper/WindowHelper.kt), started over ADB, connects
+            so the taskbar can list and control app windows. Only the shell user may call it.
+        -->
+        <provider
+            android:name=".helper.HelperProvider"
+            android:authorities="app.lumideck.helper"
+            android:directBootAware="true"
+            android:exported="true" />
     </application>
 </manifest>
