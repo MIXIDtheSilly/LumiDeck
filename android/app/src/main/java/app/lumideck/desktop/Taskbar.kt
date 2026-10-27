@@ -11,13 +11,13 @@ import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.hoverable
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Icon
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -26,18 +26,21 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import app.lumideck.R
 import app.lumideck.data.AppEntry
+import app.lumideck.ui.DeskColors
+import app.lumideck.ui.ItemShape
 import app.lumideck.ui.LumiColors
 import app.lumideck.ui.LumiDimens
-import app.lumideck.ui.PillShape
+import app.lumideck.ui.PanelShape
 import app.lumideck.ui.onSecondaryClick
 
 /**
- * The floating pill, Plasma-style: logo on the left, pinned apps next to it,
- * tray and clock on the right.
+ * The floating panel, Plasma-style: logo on the left, pinned apps next to it, tray and
+ * clock on the right.
  */
 @Composable
 fun Taskbar(
@@ -53,10 +56,10 @@ fun Taskbar(
             .fillMaxWidth()
             .padding(LumiDimens.TaskbarMargin)
             .height(LumiDimens.TaskbarHeight)
-            .shadow(16.dp, PillShape)
-            .clip(PillShape)
-            .background(LumiColors.Panel)
-            .border(1.dp, LumiColors.PanelBorder, PillShape)
+            .shadow(6.dp, PanelShape)
+            .clip(PanelShape)
+            .background(DeskColors.Panel)
+            .border(1.dp, DeskColors.Border, PanelShape)
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -64,16 +67,8 @@ fun Taskbar(
             Icon(
                 painterResource(R.drawable.ic_lumideck_glyph),
                 contentDescription = "LumiDeck menu",
-                tint = LumiColors.Text,
-                modifier = Modifier.size(22.dp),
-            )
-        }
-        if (pinned.isNotEmpty()) {
-            Box(
-                Modifier
-                    .padding(horizontal = 6.dp)
-                    .size(width = 1.dp, height = 24.dp)
-                    .background(LumiColors.PanelBorder),
+                tint = LumiColors.Mist,
+                modifier = Modifier.size(24.dp),
             )
         }
         pinned.forEach { app ->
@@ -85,10 +80,11 @@ fun Taskbar(
         BatteryIndicator()
         Spacer(Modifier.width(16.dp))
         Clock()
-        Spacer(Modifier.width(14.dp))
+        Spacer(Modifier.width(10.dp))
     }
 }
 
+/** A full-height panel button, highlighted while [active]. */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun TaskbarButton(
@@ -101,15 +97,17 @@ private fun TaskbarButton(
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     val background = when {
-        active -> LumiColors.Active
-        pressed -> LumiColors.Pressed
-        hovered -> LumiColors.Hover
-        else -> LumiColors.Panel.copy(alpha = 0f)
+        pressed -> DeskColors.Pressed
+        active -> DeskColors.Selected
+        hovered -> DeskColors.Hover
+        else -> Color.Transparent
     }
     Box(
         Modifier
-            .size(LumiDimens.TaskbarButton)
-            .clip(CircleShape)
+            .padding(vertical = 3.dp)
+            .fillMaxHeight()
+            .width(LumiDimens.TaskbarButtonWidth)
+            .clip(ItemShape)
             .background(background)
             .hoverable(interaction)
             .then(if (onSecondaryClick != null) Modifier.onSecondaryClick(onSecondaryClick) else Modifier)

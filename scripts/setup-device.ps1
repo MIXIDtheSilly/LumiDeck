@@ -28,10 +28,13 @@ if ($sdk -lt 29) { throw "LumiDeck needs Android 10 or newer (this device is API
 if (-not $SkipInstall) {
     Use-AndroidStudioJdk
     Write-Host 'Building LumiDeck...'
-    & "$LumiRoot\android\gradlew.bat" -p "$LumiRoot\android" assembleDebug --quiet
+    # Release, not debug: Compose runs several times slower in a debug build.
+    & "$LumiRoot\android\gradlew.bat" -p "$LumiRoot\android" assembleRelease --quiet
     if ($LASTEXITCODE) { throw 'Build failed.' }
     Write-Host 'Installing...'
-    Invoke-Adb install -r "$LumiRoot\android\app\build\outputs\apk\debug\app-debug.apk" | Out-Null
+    Invoke-Adb install -r "$LumiRoot\android\app\build\outputs\apk\release\app-release.apk" | Out-Null
+    # Compile ahead of time now, instead of waiting for the device's idle-time compiler.
+    Invoke-Adb shell cmd package compile -m speed -f $LumiPackage | Out-Null
 }
 
 Write-Host 'Turning on desktop mode for external displays...'

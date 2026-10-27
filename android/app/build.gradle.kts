@@ -17,8 +17,13 @@ android {
     }
 
     buildTypes {
+        // The build to run: Compose is several times slower in debug builds. Signed with
+        // the local debug key until there is a real release key.
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"))
+            signingConfig = signingConfigs.getByName("debug")
         }
     }
 

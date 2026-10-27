@@ -39,6 +39,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
@@ -53,9 +54,9 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.lumideck.data.AppEntry
-import app.lumideck.ui.LumiColors
+import app.lumideck.ui.DeskColors
+import app.lumideck.ui.ItemShape
 import app.lumideck.ui.PanelShape
-import app.lumideck.ui.TileShape
 import app.lumideck.ui.onSecondaryClick
 
 /** Kickoff-style launcher: type to search, Enter opens the first match, Esc closes. */
@@ -78,10 +79,10 @@ fun AppMenu(
         modifier
             .width(560.dp)
             .heightIn(max = 600.dp)
-            .shadow(24.dp, PanelShape)
+            .shadow(12.dp, PanelShape)
             .clip(PanelShape)
-            .background(LumiColors.Panel)
-            .border(1.dp, LumiColors.PanelBorder, PanelShape)
+            .background(DeskColors.Panel)
+            .border(1.dp, DeskColors.Border, PanelShape)
             .padding(16.dp)
             .onPreviewKeyEvent {
                 if (it.key == Key.Escape && it.type == KeyEventType.KeyUp) {
@@ -93,8 +94,8 @@ fun AppMenu(
             value = query,
             onValueChange = { query = it },
             singleLine = true,
-            textStyle = TextStyle(color = LumiColors.Text, fontSize = 15.sp),
-            cursorBrush = SolidColor(LumiColors.Mist),
+            textStyle = TextStyle(color = DeskColors.Text, fontSize = 15.sp),
+            cursorBrush = SolidColor(DeskColors.Accent),
             keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
             keyboardActions = KeyboardActions(onGo = { results.firstOrNull()?.let(onLaunch) }),
             modifier = Modifier
@@ -104,11 +105,12 @@ fun AppMenu(
                 Box(
                     Modifier
                         .fillMaxWidth()
-                        .clip(TileShape)
-                        .background(LumiColors.Field)
+                        .clip(ItemShape)
+                        .background(DeskColors.Field)
+                        .border(1.dp, DeskColors.Border, ItemShape)
                         .padding(horizontal = 14.dp, vertical = 11.dp),
                 ) {
-                    if (query.isEmpty()) Text("Search apps…", color = LumiColors.TextDim, fontSize = 15.sp)
+                    if (query.isEmpty()) Text("Search apps…", color = DeskColors.TextDim, fontSize = 15.sp)
                     field()
                 }
             },
@@ -117,7 +119,7 @@ fun AppMenu(
         if (results.isEmpty()) {
             Text(
                 if (apps.isEmpty()) "Loading apps…" else "No apps match \"$query\"",
-                color = LumiColors.TextDim,
+                color = DeskColors.TextDim,
                 fontSize = 13.sp,
                 modifier = Modifier.padding(8.dp),
             )
@@ -139,7 +141,7 @@ fun AppMenu(
         Spacer(Modifier.height(8.dp))
         Text(
             "Right-click or long-press an app to pin it to the taskbar",
-            color = LumiColors.TextDim,
+            color = DeskColors.TextDim,
             fontSize = 11.sp,
             modifier = Modifier.padding(horizontal = 4.dp),
         )
@@ -163,8 +165,9 @@ private fun AppTile(app: AppEntry, pinned: Boolean, onClick: () -> Unit, onToggl
     Column(
         Modifier
             .padding(2.dp)
-            .clip(TileShape)
-            .background(if (hovered) LumiColors.Hover else LumiColors.Panel.copy(alpha = 0f))
+            .clip(ItemShape)
+            .background(if (hovered) DeskColors.Hover else Color.Transparent)
+            .border(1.dp, if (hovered) DeskColors.Accent.copy(alpha = 0.4f) else Color.Transparent, ItemShape)
             .hoverable(interaction)
             .onSecondaryClick(onTogglePin)
             .combinedClickable(
@@ -185,14 +188,14 @@ private fun AppTile(app: AppEntry, pinned: Boolean, onClick: () -> Unit, onToggl
                         .offset(x = 3.dp, y = (-3).dp)
                         .size(9.dp)
                         .clip(CircleShape)
-                        .background(LumiColors.Mist),
+                        .background(DeskColors.Accent),
                 )
             }
         }
         Spacer(Modifier.height(6.dp))
         Text(
             app.label,
-            color = LumiColors.Text,
+            color = DeskColors.Text,
             fontSize = 12.sp,
             lineHeight = 15.sp,
             maxLines = 2,

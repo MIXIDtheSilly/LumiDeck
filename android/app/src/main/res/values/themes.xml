@@ -10,7 +10,10 @@
     <style name="Theme.LumiDeck.Desktop">
         <item name="android:windowAnimationStyle">@null</item>
         <item name="android:windowDisablePreview">true</item>
+        <item name="android:windowBackground">@color/lumideck_desktop</item>
     </style>
 
-    <color name="lumideck_base">#FF101819</color>
+    <color name="lumideck_base">#FF101519</color>
+    <!-- The wallpaper's base colour, shown for the moment before the desktop draws. -->
+    <color name="lumideck_desktop">#FFCFE0EC</color>
 </resources>

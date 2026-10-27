@@ -20,3 +20,6 @@ target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local planning notes; not part of the repo.
+docs/

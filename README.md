@@ -6,7 +6,7 @@
 
 ---
 
-LumiDeck draws a desktop on a big screen while your apps keep running on the device. The taskbar is a floating pill in the style of KDE Plasma, with the LumiDeck logo on the left.
+LumiDeck draws a desktop on a big screen while your apps keep running on the device. The taskbar is a floating panel in the style of KDE Plasma, with the LumiDeck logo on the left.
 
 There are two ways to use it, and both show the same desktop:
 
@@ -69,8 +69,8 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 
 ## Roadmap
 
-- [x] **Phase 0:** desktop app with pill taskbar, app menu, pinned apps, battery and clock; Windows client using scrcpy
-- [ ] **Phase 1:** taskbar as an always-on-top overlay, translucent blur, app tooltips, settings
+- [x] **Phase 0:** desktop app with floating taskbar, app menu, pinned apps, battery and clock; Windows client using scrcpy
+- [ ] **Phase 1:** taskbar as an always-on-top overlay, app tooltips, settings
 - [ ] **Phase 2:** polished Windows client: tray icon, auto-connect, clipboard and file drag-and-drop
 - [ ] **Phase 3:** window management: running apps in the taskbar; focus, minimise, maximise and close (via ADB on PC, Shizuku on a monitor)
 - [ ] **Phase 4:** native Rust client, Wi-Fi mode

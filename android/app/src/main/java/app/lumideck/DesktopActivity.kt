@@ -10,6 +10,9 @@ import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.mutableStateOf
+import androidx.core.view.WindowCompat
+import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import app.lumideck.desktop.DesktopScreen
 import app.lumideck.desktop.WindowPlacer
 import app.lumideck.ui.LumiTheme
@@ -23,9 +26,9 @@ class DesktopActivity : ComponentActivity() {
     private var metaAlone = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
-        // Android gives every desktop-mode display its own navigation bar, and shows it
-        // whenever another app's window has focus. Hiding it here would only make the
-        // taskbar jump, so the desktop draws behind it and the pill sits just above it.
+        // Android gives every desktop-mode display its own navigation bar. The desktop hides
+        // it (see below) and draws behind it, so the taskbar sits above it whenever Android
+        // forces it back, which it does while app windows are open.
         enableEdgeToEdge(
             statusBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
@@ -47,6 +50,11 @@ class DesktopActivity : ComponentActivity() {
                     onLaunch = windows::launch,
                 )
             }
+        }
+
+        WindowCompat.getInsetsController(window, window.decorView).apply {
+            systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+            hide(WindowInsetsCompat.Type.systemBars())
         }
     }
 

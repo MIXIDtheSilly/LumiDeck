@@ -36,9 +36,17 @@ if ($homeRole -and $homeRole.Context.PostContext -match "holders=$LumiPackage") 
 
 $env:SCRCPY_ICON_DIR = Join-Path $PSScriptRoot 'icons'
 
+# Android draws its own navigation bar along the bottom of the desktop and forces it on
+# while app windows are open. Make the display one bar taller and crop the bar off the
+# video; the desktop keeps that strip clear, so nothing else is lost. The bar is 56dp on
+# displays this large.
+$width, $height = $Resolution -split 'x' | ForEach-Object { [int]$_ }
+$navBar = [math]::Ceiling(56 * $Dpi / 160)
+
 $scrcpyArgs = @(
     "--serial=$serial"
-    "--new-display=$Resolution/$Dpi"
+    "--new-display=${width}x$($height + $navBar)/$Dpi"
+    "--crop=${width}:${height}:0:0"
     '--window-title=LumiDeck'
     # Act as a real (HID) keyboard: no on-screen keyboard popping up, Meta key works.
     '--keyboard=uhid'
@@ -46,6 +54,10 @@ $scrcpyArgs = @(
     '--mouse-bind=++++:bhsn'
     # Keep Alt, AltGr and Super free for Android; scrcpy's own shortcuts use Right Ctrl.
     '--shortcut-mod=rctrl'
+    # No on-screen keyboard or Gboard toolbar on the desktop; typing still works.
+    '--display-ime-policy=hide'
+    # Uncompressed audio: USB has the bandwidth, and it saves the device encoding Opus.
+    '--audio-codec=raw'
     '--no-vd-destroy-content'
     '--stay-awake'
 )

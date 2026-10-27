@@ -9,35 +9,49 @@ import androidx.compose.ui.unit.dp
 
 /** Colours sampled from the LumiDeck logo gradient (img/Lumideck.png). */
 object LumiColors {
-    val Night = Color(0xFF101819)
-    val Slate = Color(0xFF2E4145)
-    val Teal = Color(0xFF47666B)
-    val Mist = Color(0xFF82B8C3)
-
-    val Panel = Color(0xE0131C1E)
-    val PanelBorder = Color(0x1FFFFFFF)
-    val Hover = Color(0x1AFFFFFF)
-    val Pressed = Color(0x2EFFFFFF)
-    val Active = Mist.copy(alpha = 0.28f)
-    val Field = Color(0x12FFFFFF)
+    val Night = Color(0xFF101519)
+    val Slate = Color(0xFF2B3A42)
+    val Teal = Color(0xFF465D6B)
+    val Mist = Color(0xFF82ADC8)
 
     val Text = Color(0xFFEAF2F3)
     val TextDim = Color(0xFF9DB3B7)
     val Warning = Color(0xFFE5786D)
 }
 
-object LumiDimens {
-    val TaskbarHeight = 48.dp
-    /** Gap between the floating pill and the screen edges. */
-    val TaskbarMargin = 10.dp
-    val TaskbarButton = 40.dp
-    val TaskbarIcon = 28.dp
-    val MenuGap = 8.dp
+/**
+ * The desktop: Plasma's Breeze Light layout and contrast, tinted with the logo's light
+ * blue. Everything is opaque.
+ */
+object DeskColors {
+    val Panel = Color(0xFFF4F7FA)
+    /** Kickoff's header and footer, a step darker than the panel. */
+    val PanelAlt = Color(0xFFE6EDF3)
+    val Border = Color(0xFFC5D3DE)
+    val Field = Color(0xFFFFFFFF)
+
+    val Accent = Color(0xFF3A87B8)
+    val Hover = Accent.copy(alpha = 0.14f)
+    val Pressed = Accent.copy(alpha = 0.24f)
+    val Selected = Accent.copy(alpha = 0.22f)
+
+    val Text = Color(0xFF1C2830)
+    val TextDim = Color(0xFF5A6B78)
+    val Warning = Color(0xFFD2503F)
 }
 
-val PillShape = RoundedCornerShape(percent = 50)
-val PanelShape = RoundedCornerShape(24.dp)
-val TileShape = RoundedCornerShape(14.dp)
+object LumiDimens {
+    val TaskbarHeight = 44.dp
+    /** Gap between the floating taskbar and the screen edges. */
+    val TaskbarMargin = 8.dp
+    val TaskbarButtonWidth = 48.dp
+    val TaskbarIcon = 28.dp
+    val MenuGap = 6.dp
+}
+
+/** Plasma's floating panel and popups: rounded rectangles with small corners. */
+val PanelShape = RoundedCornerShape(8.dp)
+val ItemShape = RoundedCornerShape(4.dp)
 
 @Composable
 fun LumiTheme(content: @Composable () -> Unit) {

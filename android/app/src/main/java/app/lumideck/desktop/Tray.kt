@@ -29,7 +29,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
-import app.lumideck.ui.LumiColors
+import app.lumideck.ui.DeskColors
 import kotlinx.coroutines.delay
 import java.util.Date
 import java.util.Locale
@@ -47,8 +47,8 @@ fun Clock(modifier: Modifier = Modifier) {
     val time = DateFormat.getTimeFormat(context).format(Date(now))
     val datePattern = remember { DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEdMMM") }
     Column(modifier, horizontalAlignment = Alignment.End) {
-        Text(time, color = LumiColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp)
-        Text(DateFormat.format(datePattern, now).toString(), color = LumiColors.TextDim, fontSize = 11.sp, lineHeight = 13.sp)
+        Text(time, color = DeskColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp)
+        Text(DateFormat.format(datePattern, now).toString(), color = DeskColors.TextDim, fontSize = 11.sp, lineHeight = 13.sp)
     }
 }
 
@@ -84,9 +84,9 @@ fun BatteryIndicator(modifier: Modifier = Modifier) {
     }
     val state = battery ?: return
     val color = when {
-        state.charging -> LumiColors.Mist
-        state.percent <= 15 -> LumiColors.Warning
-        else -> LumiColors.Text
+        state.charging -> DeskColors.Accent
+        state.percent <= 15 -> DeskColors.Warning
+        else -> DeskColors.Text
     }
     val description = "Battery ${state.percent}%" + if (state.charging) ", charging" else ""
     Row(
