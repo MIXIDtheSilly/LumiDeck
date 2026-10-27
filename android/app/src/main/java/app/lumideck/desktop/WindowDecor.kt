@@ -198,7 +198,7 @@ class WindowDecor(
         val bounds = if (gesture.edges == 0) gesture.moved(x, y) else gesture.resized(x, y)
         expected = Expected(gesture.taskId, bounds)
         layout()
-        // Moving is cheap, but a resize redraws the app.
+        // Moving is cheap, but a resize redraws the app, so it waits between steps.
         sender.send(gesture.taskId, bounds, if (gesture.edges == 0) 0L else RESIZE_INTERVAL_MS)
     }
 
@@ -451,7 +451,10 @@ class WindowDecor(
         }
     }
 
-    /** Sends a window's new bounds to the helper at most once a frame, or every [interval] ms. */
+    /**
+     * Sends a window's new bounds to the helper: right away with no [interval], or else at
+     * most every [interval] ms.
+     */
     private inner class BoundsSender {
         private var pending: Pair<Int, Rect>? = null
         private var scheduled = false
@@ -459,6 +462,9 @@ class WindowDecor(
 
         fun send(taskId: Int, bounds: Rect, interval: Long) {
             pending = taskId to bounds
+            // Android hands over the pointer's moves once a frame, so this is once a frame
+            // too. Waiting for the next one would hold the window back a frame behind its bar.
+            if (interval == 0L && !scheduled) return flush()
             if (scheduled) return
             scheduled = true
             val wait = (lastSent + interval - SystemClock.uptimeMillis()).coerceAtLeast(0)

@@ -88,6 +88,9 @@ internal class VirtualScreen(width: Int, height: Int, dpi: Int) {
  * Tuned for latency over size: the hardware encoder runs at real-time priority with no
  * frames held back, and HEVC comes first because this kind of hardware encodes it faster
  * (the RG556 manages about 65 frames a second at 1080p in HEVC and 45 in H.264).
+ * Even so, the RG556's encoder takes about 26 ms a frame and often hands over two frames at
+ * once; the PC spaces them out again (see desktop/client/src/video.rs). None of the other
+ * settings tried there changes that: operating rate, low latency, bit rate mode, scene mode.
  */
 internal class VideoStream(
     private val screen: VirtualScreen,
@@ -202,6 +205,8 @@ internal class VideoStream(
         private var bytes = 0L
         private var latencySum = 0L
         private var latencyMax = 0L
+        private var lastOut = 0L
+        private val gaps = ArrayList<Long>()
 
         fun frame(ptsUs: Long, size: Int) {
             val now = System.nanoTime()
@@ -211,14 +216,19 @@ internal class VideoStream(
                 latencySum += latency
                 latencyMax = maxOf(latencyMax, latency)
             }
+            if (lastOut != 0L) gaps += now - lastOut
+            lastOut = now
             frames++
             bytes += size
             val elapsed = now - since
             if (elapsed < STATS_NS) return
             if (options.stats) {
+                gaps.sort()
+                // How evenly the frames come out of the encoder.
+                val spread = gaps.getOrElse(gaps.size * 95 / 100) { 0L } / 1e6
                 println(
-                    "Video: %.0f fps, %.1f Mbit/s, encoding %.1f ms (max %.1f)".format(
-                        frames * 1e9 / elapsed, bytes * 8e3 / elapsed, latencySum / 1000.0 / frames, latencyMax / 1000.0,
+                    "Video: %.0f fps, %.1f Mbit/s, encoding %.1f ms (max %.1f), 95%% within %.1f ms of each other".format(
+                        frames * 1e9 / elapsed, bytes * 8e3 / elapsed, latencySum / 1000.0 / frames, latencyMax / 1000.0, spread,
                     ),
                 )
             }
@@ -227,6 +237,7 @@ internal class VideoStream(
             bytes = 0
             latencySum = 0
             latencyMax = 0
+            gaps.clear()
         }
     }
 

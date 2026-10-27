@@ -43,9 +43,10 @@ Usage: lumideck [options]
   --dpi <n>             Its density: 160 is one pixel per dp (default 160)
   --fullscreen          Start fullscreen (Right Ctrl+F toggles it)
   --codec <hevc|h264>   Video codec (default hevc, which the device may not have)
-  --bitrate <Mbit/s>    Video bit rate (default 16)
+  --bitrate <Mbit/s>    Video bit rate (default 40)
   --no-audio            Leave the sound on the device
   --stats               Print how fast video goes, every few seconds
+  --dump-video <file>   Save the video stream as it arrives, to look into problems
 ";
 
 struct Args {
@@ -58,6 +59,7 @@ struct Args {
     bitrate: u32,
     audio: bool,
     stats: bool,
+    dump: Option<std::path::PathBuf>,
 }
 
 impl Args {
@@ -69,9 +71,10 @@ impl Args {
             dpi: 160,
             fullscreen: false,
             codec: "hevc".into(),
-            bitrate: 16,
+            bitrate: 40,
             audio: true,
             stats: false,
+            dump: None,
         };
         let mut it = std::env::args().skip(1);
         while let Some(arg) = it.next() {
@@ -90,6 +93,7 @@ impl Args {
                 "--bitrate" => args.bitrate = value()?.parse()?,
                 "--no-audio" => args.audio = false,
                 "--stats" => args.stats = true,
+                "--dump-video" => args.dump = Some(value()?.into()),
                 "--help" | "-h" => {
                     print!("{USAGE}");
                     std::process::exit(0);
@@ -122,6 +126,8 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let args = Args::parse()?;
+    // Waits as short as a millisecond, for spacing out the frames (see video::due).
+    unsafe { windows::Win32::Media::timeBeginPeriod(1) };
     let adb = Adb::connect(args.serial.clone())?;
     adb.prepare()?;
 
@@ -256,8 +262,13 @@ impl App {
             let _ = proxy.send_event(UserEvent::Shortcut(shortcut));
         });
 
-        let options =
-            video::Options { hwnd, header: self.header.take().unwrap(), crop: content, stats: self.args.stats };
+        let options = video::Options {
+            hwnd,
+            header: self.header.take().unwrap(),
+            crop: content,
+            stats: self.args.stats,
+            dump: self.args.dump.clone(),
+        };
         let queue = self.video_queue.take().unwrap();
         let size = self.size.clone();
         let controls = self.controls.clone();

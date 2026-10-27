@@ -16,13 +16,17 @@ internal class Options(args: Array<String>) {
     val dpi = int("dpi", 160)
     /** "hevc" (falls back to H.264 if the device has no HEVC encoder) or "h264". */
     val codec = values["codec"] ?: "hevc"
-    val bitRate = int("bitrate", 16_000_000)
+    val bitRate = int("bitrate", 40_000_000)
     val maxFps = int("max_fps", 0)
     val audio = bool("audio", true)
     val stayAwake = bool("stay_awake", true)
     val stats = bool("stats", false)
-    /** Encoder settings to use, for finding out which ones a device's encoder dislikes. */
-    val tune = (values["tune"] ?: "repeat,priority,latency,bframes,prepend").split(',').toSet()
+    /**
+     * Encoder settings to use, for finding out which ones a device's encoder dislikes.
+     * "prepend" is off by default: the RG556's HEVC encoder blanks the key frames it
+     * prepends to.
+     */
+    val tune = (values["tune"] ?: "repeat,priority,latency,bframes").split(',').toSet()
 
     private fun int(key: String, default: Int) = values[key]?.toIntOrNull() ?: default
 
