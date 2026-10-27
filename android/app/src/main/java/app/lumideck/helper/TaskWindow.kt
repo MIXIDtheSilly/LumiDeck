@@ -21,6 +21,8 @@ data class TaskWindow(
     val bounds: Rect,
     /** When it was last in front, in [android.os.SystemClock.elapsedRealtime] time. */
     val lastActive: Long,
+    /** Its place in the stack of windows on its display: lower is further in front. */
+    val layer: Int,
 ) : Parcelable {
     override fun describeContents() = 0
 
@@ -34,6 +36,7 @@ data class TaskWindow(
         dest.writeBoolean(freeform)
         bounds.writeToParcel(dest, flags)
         dest.writeLong(lastActive)
+        dest.writeInt(layer)
     }
 
     companion object {
@@ -49,6 +52,7 @@ data class TaskWindow(
                 freeform = source.readBoolean(),
                 bounds = Rect.CREATOR.createFromParcel(source),
                 lastActive = source.readLong(),
+                layer = source.readInt(),
             )
 
             override fun newArray(size: Int) = arrayOfNulls<TaskWindow>(size)

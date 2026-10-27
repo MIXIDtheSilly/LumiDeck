@@ -12,6 +12,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Parcel
 import android.os.Process
+import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import app.lumideck.SettingsActivity
@@ -37,6 +38,7 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
     private var listener: IWindowListener? = null
     private var sent: List<TaskWindow>? = null
     private val refresh = Runnable(::send)
+    private var refreshAt = Long.MAX_VALUE
 
     override fun focus(taskId: Int) = command { tasks.moveToFront(taskId) }
 
@@ -60,7 +62,7 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
             Log.w(TAG, "Window command failed", e)
         }
         // Not every change (resizing, for one) makes Android report it.
-        handler.post(::scheduleRefresh)
+        handler.post { scheduleRefresh() }
     }
 
     private fun checkCaller() {
@@ -69,19 +71,27 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
 
     private fun start(): Boolean {
         if (!attach()) return false
-        tasks.listen { handler.post(::scheduleRefresh) }
+        tasks.listen { handler.post { scheduleRefresh() } }
         scheduleRefresh()
         Log.i(TAG, "Running")
         return true
     }
 
-    /** Batches the bursts of changes Android reports for one window opening or closing. */
-    private fun scheduleRefresh() {
+    /**
+     * Lists the windows again within [delay] ms, batching the bursts of changes Android
+     * reports for one window opening or closing. An earlier refresh already due stands, so a
+     * stream of changes, such as a window being dragged, doesn't hold it off.
+     */
+    private fun scheduleRefresh(delay: Long = 50) {
+        val time = SystemClock.uptimeMillis() + delay
+        if (time >= refreshAt) return
         handler.removeCallbacks(refresh)
-        handler.postDelayed(refresh, 50)
+        handler.postAtTime(refresh, time)
+        refreshAt = time
     }
 
     private fun send() {
+        refreshAt = Long.MAX_VALUE
         val listener = listener ?: return
         val windows = try {
             tasks.list()
@@ -91,7 +101,7 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
         }
         // Android doesn't report windows being moved, resized or maximised from their title
         // bar, so check again shortly while any are showing.
-        if (windows.any { it.visible } && !handler.hasCallbacks(refresh)) handler.postDelayed(refresh, POLL_MS)
+        if (windows.any { it.visible }) scheduleRefresh(POLL_MS)
         if (windows == sent) return
         try {
             listener.onWindowsChanged(windows)
@@ -202,7 +212,25 @@ private class Tasks {
     private var stackListener: Binder? = null
 
     /** Every app window on every display, oldest first. */
-    fun list(): List<TaskWindow> = running().mapNotNull { it.toWindow() }.sortedBy { it.taskId }
+    fun list(): List<TaskWindow> {
+        val layers = layers()
+        return running().mapNotNull { it.toWindow(layers) }.sortedBy { it.taskId }
+    }
+
+    /**
+     * Each task's place in the stack, by task id: Android lists each display's top-level
+     * tasks from the front. A window's task is usually one of them; otherwise it's inside one.
+     */
+    private fun layers(): Map<Int, Int> {
+        val roots = method("getAllRootTaskInfos").invoke(atm) as List<*>
+        val layers = mutableMapOf<Int, Int>()
+        roots.forEachIndexed { i, root ->
+            if (root == null) return@forEachIndexed
+            root.hidden<Int>("taskId")?.let { layers.putIfAbsent(it, i) }
+            root.hidden<IntArray>("childTaskIds")?.forEach { layers.putIfAbsent(it, i) }
+        }
+        return layers
+    }
 
     fun moveToFront(taskId: Int) {
         val move = method("moveTaskToFront")
@@ -257,7 +285,7 @@ private class Tasks {
         else -> getTasks.invoke(atm, MAX_TASKS, false, false, Display.INVALID_DISPLAY)
     }.let { (it as List<*>).filterIsInstance<ActivityManager.RunningTaskInfo>() }
 
-    private fun ActivityManager.RunningTaskInfo.toWindow(): TaskWindow? {
+    private fun ActivityManager.RunningTaskInfo.toWindow(layers: Map<Int, Int>): TaskWindow? {
         val config = hidden<Any>("configuration") ?: return null
         val window = config.javaClass.getField("windowConfiguration").get(config)!!
         // Leaves out home screens (LumiDeck's own desktop among them), recents and the assistant.
@@ -275,10 +303,12 @@ private class Tasks {
             freeform = window.javaClass.getMethod("getWindowingMode").invoke(window) == WINDOWING_MODE_FREEFORM,
             bounds = window.javaClass.getMethod("getBounds").invoke(window) as Rect,
             lastActive = hidden("lastActiveTime") ?: 0L,
+            layer = layers[taskId] ?: Int.MAX_VALUE,
         )
     }
 
-    private fun method(name: String) = atm.javaClass.methods.first { it.name == name }
+    private fun method(name: String) =
+        atm.javaClass.methods.firstOrNull { it.name == name } ?: throw NoSuchMethodException(name)
 
     /** Reads a public field the SDK hides. */
     @Suppress("UNCHECKED_CAST")

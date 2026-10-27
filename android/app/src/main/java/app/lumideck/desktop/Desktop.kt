@@ -63,6 +63,9 @@ class DesktopState {
     /** The taskbar is attached to the screen edge rather than floating. */
     var panelAttached by mutableStateOf(false)
 
+    /** The taskbar's buttons, which also name the windows' title bars (see [WindowDecor]). */
+    var taskbarItems by mutableStateOf(emptyList<TaskbarItem>())
+
     fun toggleMenu() {
         val open = !menuOpen
         closeMenus()
@@ -129,7 +132,10 @@ fun TaskbarLayer(state: DesktopState, windows: Windows, onHeightChange: (Dp) -> 
         PanelFloat.Never -> true
         PanelFloat.Adaptive -> items.any { item -> item.windows.any(windows::reachesPanel) }
     }
-    SideEffect { state.panelAttached = attached }
+    SideEffect {
+        state.panelAttached = attached
+        state.taskbarItems = items
+    }
     // Floating height while it floats and while it slides between the two, so it's never cut off.
     var settled by remember { mutableStateOf(attached) }
     LaunchedEffect(attached) {

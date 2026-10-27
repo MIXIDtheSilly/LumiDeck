@@ -38,6 +38,7 @@ object DeskColors {
     val Text = Color(0xFF1C2830)
     val TextDim = Color(0xFF5A6B78)
     val Warning = Color(0xFFD2503F)
+    val WarningPressed = Color(0xFFB03F31)
 }
 
 /** The taskbar's height and icon size are settings: see [app.lumideck.data.TaskbarSize]. */

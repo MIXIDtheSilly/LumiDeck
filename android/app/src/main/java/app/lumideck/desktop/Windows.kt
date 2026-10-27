@@ -70,7 +70,7 @@ class Windows(private val activity: Activity) {
     /** Maximised means filling the screen above the taskbar, which stays in view. */
     fun toggleMaximized(window: TaskWindow) {
         val bounds = if (isMaximized(window)) {
-            restoreBounds.remove(window.taskId) ?: nextBounds()
+            unmaximized(window)
         } else {
             restoreBounds[window.taskId] = window.bounds
             maximizedArea()
@@ -78,6 +78,9 @@ class Windows(private val activity: Activity) {
         HelperLink.resize(window.taskId, bounds)
         HelperLink.focus(window.taskId)
     }
+
+    /** Where maximised [window] goes back to, which it's then no longer expected to. */
+    fun unmaximized(window: TaskWindow): Rect = restoreBounds.remove(window.taskId) ?: nextBounds()
 
     /** Whether [window] reaches down to where the floating taskbar sits, so the taskbar attaches to the edge. */
     fun reachesPanel(window: TaskWindow) = window.visible && window.bounds.bottom > areaAbove(attached = false).bottom

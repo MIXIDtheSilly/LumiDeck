@@ -2,7 +2,10 @@ package app.lumideck.desktop
 
 import android.app.Activity
 import android.graphics.PixelFormat
+import android.graphics.Rect
 import android.os.Build
+import android.os.Handler
+import android.os.Looper
 import android.provider.Settings
 import android.view.Gravity
 import android.view.KeyEvent
@@ -48,6 +51,14 @@ class TaskbarOverlay(
     private var taskbar: View? = null
     private var menu: View? = null
     private var taskbarHeight = Dp.Unspecified
+    private var taskbarWindowHeight = 0
+    private val handler = Handler(Looper.getMainLooper())
+
+    /** Windows were added since the menu window, so they're in front of it (see [addUnderMenus]). */
+    private var menuBuried = false
+
+    /** Called when the taskbar's window changes height. */
+    var onTaskbarResize: () -> Unit = {}
 
     /**
      * Shows [taskbarContent] and [menuContent] above app windows. [menuContent] reports
@@ -87,6 +98,42 @@ class TaskbarOverlay(
         menu = null
     }
 
+    /** The strip along the bottom of the screen that the taskbar's window covers. */
+    fun taskbarArea(): Rect {
+        // The desktop's window covers the whole screen.
+        val screen = activity.window.decorView
+        return Rect(0, screen.height - taskbarWindowHeight, screen.width, screen.height)
+    }
+
+    /**
+     * Adds another window above app windows, such as a title bar (see [WindowDecor]). The
+     * menus stay in front of it: Android stacks LumiDeck's windows in the order they're
+     * added, so the menu window is added again once it's closed.
+     */
+    fun addUnderMenus(view: View, params: LayoutParams) {
+        windowManager.addView(view, params)
+        menuBuried = true
+        // Once, after however many are added together.
+        handler.post(::raiseMenu)
+    }
+
+    fun updateWindow(view: View, params: LayoutParams) = windowManager.updateViewLayout(view, params)
+
+    fun removeWindow(view: View) = windowManager.removeView(view)
+
+    /** [root], showing [content], ready to be added as a window. */
+    fun <T : FrameLayout> withContent(root: T, content: @Composable () -> Unit): T = root.apply { host(content) }
+
+    private fun raiseMenu() {
+        val menu = menu ?: return
+        if (!menuBuried || menu.visibility == View.VISIBLE) return
+        menuBuried = false
+        // It's closed, so starting its content over loses nothing.
+        windowManager.removeView(menu)
+        windowManager.addView(menu, menuParams())
+        hideSystemBars(menu)
+    }
+
     /**
      * Fits the taskbar window to the taskbar, which takes [height] above the navigation bar.
      * The taskbar is drawn along the window's bottom edge and the window is anchored there,
@@ -96,10 +143,13 @@ class TaskbarOverlay(
         if (height == taskbarHeight) return
         taskbarHeight = height
         taskbar?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, taskbarParams()) }
+        onTaskbarResize()
     }
 
     private fun setMenuShown(shown: Boolean) {
         menu?.visibility = if (shown) View.VISIBLE else View.GONE
+        // Not while its content is still running this.
+        if (!shown && menuBuried) handler.post(::raiseMenu)
     }
 
     /**
@@ -114,8 +164,8 @@ class TaskbarOverlay(
         } else {
             0
         }
-        val height = ceil(taskbarHeight.value * density).toInt() + navBar
-        return overlayParams(height, LayoutParams.FLAG_NOT_FOCUSABLE).apply { title = "LumiDeck taskbar" }
+        taskbarWindowHeight = ceil(taskbarHeight.value * density).toInt() + navBar
+        return overlayParams(taskbarWindowHeight, LayoutParams.FLAG_NOT_FOCUSABLE).apply { title = "LumiDeck taskbar" }
     }
 
     private fun menuParams() = overlayParams(LayoutParams.MATCH_PARENT, 0).apply { title = "LumiDeck menu" }

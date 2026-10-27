@@ -21,6 +21,7 @@ import app.lumideck.desktop.MenuLayer
 import app.lumideck.desktop.MetaTap
 import app.lumideck.desktop.TaskbarLayer
 import app.lumideck.desktop.TaskbarOverlay
+import app.lumideck.desktop.WindowDecor
 import app.lumideck.desktop.Windows
 import app.lumideck.ui.LumiTheme
 
@@ -29,6 +30,7 @@ class DesktopActivity : ComponentActivity() {
     private val state = DesktopState()
     private val windows = Windows(this)
     private val overlay = TaskbarOverlay(this, onMetaTap = ::onMetaTap, onBack = state::closeMenus)
+    private val decor = WindowDecor(this, overlay, state, windows)
     private val overlayShown = mutableStateOf(false)
     private val metaTap = MetaTap(::onMetaTap)
     private var lastMetaTap = 0L
@@ -42,6 +44,8 @@ class DesktopActivity : ComponentActivity() {
             navigationBarStyle = SystemBarStyle.dark(Color.TRANSPARENT),
         )
         super.onCreate(savedInstanceState)
+
+        overlay.onTaskbarResize = decor::layout
 
         // Back never leaves the desktop; it only closes the menus.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -69,9 +73,12 @@ class DesktopActivity : ComponentActivity() {
             taskbarContent = { LumiTheme { TaskbarLayer(state, windows, onHeightChange = overlay::setTaskbarHeight) } },
             menuContent = { onShownChange -> LumiTheme { MenuLayer(state, windows, onShownChange) } },
         )
+        // Title bars need the overlay too; without it, windows keep Android's own.
+        if (overlayShown.value) decor.start()
     }
 
     override fun onDestroy() {
+        decor.stop()
         overlay.hide()
         super.onDestroy()
     }

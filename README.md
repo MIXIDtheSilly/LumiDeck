@@ -59,6 +59,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 - Open apps appear in the taskbar after the pinned ones, with a line under them. Click one to bring it to the front, or to minimise it if it's already there. Right-click or long-press it to maximise, minimise, pin or close it.
 - The taskbar stays above app windows, even maximised ones. This needs Android's "Display over other apps" permission, which the setup script and the PC client grant; without it the taskbar sits behind apps.
 - Open apps in the taskbar need the **window helper**, a small program the PC client starts over ADB (Android doesn't let apps manage other apps' windows). It keeps running after you unplug, until the device reboots. To use a monitor after a reboot, plug into the PC once and run `scripts\setup-device.ps1 -SkipInstall`. Without the helper, the taskbar shows only pinned apps.
+- Windows get LumiDeck's own title bar: drag it to move the window, double-click it to maximise, and drag a maximised window to restore its size. Drag a window's edges or corners to resize it. Android's own title bar can't move windows on these screens, so LumiDeck covers it; this needs the window helper and "Display over other apps".
 - The taskbar floats, and attaches to the bottom edge while a window reaches down to it, as on Plasma.
 - **Desktop Settings**, in the app menu or the taskbar's right-click menu, sets the wallpaper (a colour or your own picture), the taskbar's size, whether it floats, the clock format and the order of pinned apps.
 - In the PC window, scrcpy's own shortcuts use **Right Ctrl** (for example, Right Ctrl+F toggles fullscreen).
@@ -77,7 +78,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 - [x] **Phase 0:** desktop app with floating taskbar, app menu, pinned apps, battery and clock; Windows client using scrcpy
 - [x] **Phase 1:** always-on-top taskbar, app tooltips, reordering pins, settings, floating or attached taskbar, home-app check
 - [ ] **Phase 2:** polished Windows client: tray icon, auto-connect, clipboard and file drag-and-drop
-- [ ] **Phase 3:** window management: ~~running apps in the taskbar with focus, minimise, maximise and close~~ (done, via ADB), Shizuku so it works on a monitor without a PC, Alt+Tab, snapping
+- [ ] **Phase 3:** window management: ~~running apps in the taskbar with focus, minimise, maximise and close; title bars for moving and resizing windows~~ (done, via ADB), Shizuku so it works on a monitor without a PC, Alt+Tab, snapping
 - [ ] **Phase 4:** native Rust client, Wi-Fi mode
 - [ ] **Phase 5:** Linux and macOS clients; themes, notification centre, widgets
 
