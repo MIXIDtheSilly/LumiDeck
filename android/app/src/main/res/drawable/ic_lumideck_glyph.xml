@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The LumiDeck mark from img/Lumideck_plain.png, traced on its 750px grid. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="750"
+    android:viewportHeight="750">
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M0,78 A78,78 0 0 1 78,0 H272 A78,78 0 0 1 350,78 V320 A80,80 0 0 0 430,400 H672 A78,78 0 0 1 750,478 V672 A78,78 0 0 1 672,750 H78 A78,78 0 0 1 0,672 Z" />
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M400,78 A78,78 0 0 1 478,0 H672 A78,78 0 0 1 750,78 V272 A78,78 0 0 1 672,350 H438 A38,38 0 0 1 400,312 Z" />
+</vector>

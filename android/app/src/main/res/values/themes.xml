@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.LumiDeck" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/lumideck_base</item>
+        <item name="android:statusBarColor">@android:color/transparent</item>
+        <item name="android:navigationBarColor">@android:color/transparent</item>
+    </style>
+
+    <!-- No window animation so the desktop appears instantly when a display connects. -->
+    <style name="Theme.LumiDeck.Desktop">
+        <item name="android:windowAnimationStyle">@null</item>
+        <item name="android:windowDisablePreview">true</item>
+    </style>
+
+    <color name="lumideck_base">#FF101819</color>
+</resources>
