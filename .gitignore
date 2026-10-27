@@ -14,8 +14,10 @@ captures/
 *.iml
 .vscode/
 
-# Rust (desktop client, later)
+# Rust (desktop client)
 target/
+# ffmpeg's development files, from desktop/client/get-ffmpeg.ps1.
+desktop/client/ffmpeg/
 
 # OS
 .DS_Store

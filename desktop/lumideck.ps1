@@ -1,11 +1,15 @@
 <#
 .SYNOPSIS
-    LumiDeck for Windows (v0): opens the device's LumiDeck desktop in a window.
+    LumiDeck for Windows: opens the device's LumiDeck desktop in a window.
 
 .DESCRIPTION
-    scrcpy creates a virtual display on the device; Android starts the LumiDeck desktop
-    on it, and scrcpy streams it here with keyboard, mouse and audio. Closing the window
-    moves any open apps back to the device's own screen.
+    Runs the LumiDeck client (desktop\client), building it first if needed. The client
+    starts LumiDeck's stream server on the device, which creates a new display; Android
+    starts the LumiDeck desktop on it, and the client shows it here with its sound and
+    sends it the keyboard and mouse. Closing the window moves any open apps back to the
+    device's own screen.
+
+    -Scrcpy uses scrcpy instead, as LumiDeck did before it had its own client.
 
 .EXAMPLE
     .\desktop\lumideck.ps1
@@ -17,11 +21,36 @@ param(
     # 160 dpi = 1 px per dp, which gives desktop-sized UI at 1080p.
     [int]$Dpi = 160,
     [switch]$Fullscreen,
-    # Turn the device's own screen off while the desktop is open.
+    [switch]$NoAudio,
+    # Print how fast the video goes.
+    [switch]$Stats,
+    [switch]$Scrcpy,
+    # Turn the device's own screen off while the desktop is open (scrcpy only, for now).
     [switch]$ScreenOff
 )
 
 . "$PSScriptRoot\..\scripts\common.ps1"
+
+if (-not $Scrcpy) {
+    $client = Join-Path $PSScriptRoot 'client'
+    $exe = Join-Path $client 'target\release\lumideck.exe'
+    # Brings the client up to date (quick when it already is).
+    if (Get-Command cargo -ErrorAction SilentlyContinue) {
+        if (-not (Test-Path (Join-Path $client 'ffmpeg'))) { & (Join-Path $client 'get-ffmpeg.ps1') }
+        cargo build --release --quiet --manifest-path (Join-Path $client 'Cargo.toml')
+        if ($LASTEXITCODE -ne 0) { throw 'The client failed to build.' }
+    } elseif (-not (Test-Path $exe)) {
+        throw 'Building the client needs Rust. Install it with: winget install --id Rustlang.Rustup -e'
+    }
+    if ($ScreenOff) { Write-Warning '-ScreenOff needs -Scrcpy for now.' }
+    $clientArgs = @('--resolution', $Resolution, '--dpi', $Dpi)
+    if ($Serial) { $clientArgs += '--serial', $Serial }
+    if ($Fullscreen) { $clientArgs += '--fullscreen' }
+    if ($NoAudio) { $clientArgs += '--no-audio' }
+    if ($Stats) { $clientArgs += '--stats' }
+    & $exe @clientArgs
+    exit $LASTEXITCODE
+}
 
 Assert-Tool scrcpy 'Genymobile.scrcpy'
 $serial = Select-LumiDevice $Serial

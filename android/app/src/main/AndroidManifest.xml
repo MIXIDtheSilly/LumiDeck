@@ -57,7 +57,7 @@
         <!--
             The desktop. Android starts this on every display that shows system
             decorations: monitors over USB-C (with "force desktop mode" on) and the
-            virtual display scrcpy creates for the PC window.
+            virtual display the PC client streams.
         -->
         <activity
             android:name=".DesktopActivity"
