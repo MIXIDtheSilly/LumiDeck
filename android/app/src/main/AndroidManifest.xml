@@ -25,9 +25,13 @@
             when that launcher is also the default HOME app, so LumiDeck has to be
             the default home. On the device's own screen this activity then forwards
             to the launcher the user picked (e.g. the stock Anbernic launcher).
+
+            Direct-boot aware, like Launcher3: if the set of home apps differs before and
+            after the device unlocks at boot, Android drops LumiDeck as the default.
         -->
         <activity
             android:name=".HomeActivity"
+            android:directBootAware="true"
             android:exported="true"
             android:launchMode="singleTask"
             android:stateNotNeeded="true"
@@ -50,6 +54,7 @@
         -->
         <activity
             android:name=".DesktopActivity"
+            android:directBootAware="true"
             android:exported="true"
             android:launchMode="singleTop"
             android:stateNotNeeded="true"

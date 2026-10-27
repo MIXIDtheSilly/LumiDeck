@@ -15,7 +15,15 @@ private const val KEY_PINS = "pinned_apps"
 private const val KEY_HANDHELD_LAUNCHER = "handheld_launcher"
 
 class LumiPrefs(context: Context) {
-    val prefs: SharedPreferences = context.applicationContext.getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    /**
+     * Device-protected storage, because the home screen can start before the device is
+     * unlocked at boot, when normal app storage can't be read yet.
+     */
+    val prefs: SharedPreferences = context.applicationContext.createDeviceProtectedStorageContext().run {
+        // Carry over prefs written to normal storage by older builds.
+        runCatching { moveSharedPreferencesFrom(context.applicationContext, FILE) }
+        getSharedPreferences(FILE, Context.MODE_PRIVATE)
+    }
 
     var pinnedKeys: List<String>
         get() = prefs.getString(KEY_PINS, "").orEmpty().split('\n').filter { it.isNotEmpty() }

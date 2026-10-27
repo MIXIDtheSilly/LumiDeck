@@ -81,7 +81,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 - Android gives every desktop-mode screen its own navigation-bar strip along the bottom. It shows the wallpaper while the desktop is focused and turns black while an app is focused. The taskbar sits just above it. Hiding it needs system-level access, which is planned for Phase 3.
 - Some apps don't resize well in windows.
 - Device makers can change how desktop mode behaves. On Samsung phones, DeX takes over external monitors.
-- **Anbernic RG556:** video out tops out at 1080p, and the device can't charge while it's driving a monitor. That's why the battery level always shows in the taskbar.
+- **Anbernic RG556:** video out tops out at 1080p, and the device can't charge while it's driving a monitor. That's why the battery level always shows in the taskbar. Its firmware can also forget LumiDeck as the home app after a reboot. The PC client re-applies it each time, but on a monitor you may need to run `scripts\setup-device.ps1 -SkipInstall` again.
 
 ## Credits
 

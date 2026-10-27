@@ -1,7 +1,10 @@
 package app.lumideck.data
 
+import android.content.BroadcastReceiver
 import android.content.ComponentName
 import android.content.Context
+import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.LauncherApps
 import android.os.Handler
 import android.os.Looper
@@ -15,6 +18,7 @@ import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
@@ -65,6 +69,13 @@ fun rememberInstalledApps(): State<List<AppEntry>> {
             override fun onPackagesUnavailable(packageNames: Array<String>, user: UserHandle, replacing: Boolean) { changes.trySend(Unit) }
         }
         launcherApps.registerCallback(callback, Handler(Looper.getMainLooper()))
+        // Before the first unlock after boot, only direct-boot-aware apps are listed.
+        val unlockReceiver = object : BroadcastReceiver() {
+            override fun onReceive(context: Context, intent: Intent) { changes.trySend(Unit) }
+        }
+        ContextCompat.registerReceiver(
+            context, unlockReceiver, IntentFilter(Intent.ACTION_USER_UNLOCKED), ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         try {
             while (true) {
                 value = withContext(Dispatchers.IO) { loadApps(context, iconSizePx) }
@@ -72,6 +83,7 @@ fun rememberInstalledApps(): State<List<AppEntry>> {
             }
         } finally {
             launcherApps.unregisterCallback(callback)
+            context.unregisterReceiver(unlockReceiver)
         }
     }
 }

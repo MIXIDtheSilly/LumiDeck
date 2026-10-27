@@ -26,6 +26,14 @@ param(
 Assert-Tool scrcpy 'Genymobile.scrcpy'
 $serial = Select-LumiDevice $Serial
 
+# Some firmware (seen on the Anbernic RG556) keeps LumiDeck as the HOME role holder after
+# a reboot but stops resolving it as home, so the desktop would come up as the stock
+# launcher. Re-adding the role resyncs it. Skipped if the user picked another home app.
+$homeRole = adb -s $serial shell dumpsys role | Select-String -Pattern 'android.app.role.HOME' -Context 0, 1
+if ($homeRole -and $homeRole.Context.PostContext -match "holders=$LumiPackage") {
+    adb -s $serial shell cmd role add-role-holder android.app.role.HOME $LumiPackage | Out-Null
+}
+
 $env:SCRCPY_ICON_DIR = Join-Path $PSScriptRoot 'icons'
 
 $scrcpyArgs = @(

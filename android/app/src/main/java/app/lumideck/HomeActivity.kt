@@ -1,11 +1,16 @@
 package app.lumideck
 
 import android.app.ActivityOptions
+import android.content.ActivityNotFoundException
+import android.content.BroadcastReceiver
 import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
 import android.os.Bundle
+import android.os.UserManager
 import android.provider.Settings
 import android.view.Display
 import androidx.activity.ComponentActivity
@@ -41,14 +46,15 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
 import androidx.lifecycle.compose.LifecycleResumeEffect
 import app.lumideck.data.LumiPrefs
 import app.lumideck.ui.LumiColors
+import app.lumideck.ui.LumiLogo
 import app.lumideck.ui.LumiTheme
 
 /**
@@ -59,11 +65,27 @@ import app.lumideck.ui.LumiTheme
 class HomeActivity : ComponentActivity() {
     private val prefs by lazy { LumiPrefs(this) }
 
+    /** Home was pressed before the device unlocked, when the other launcher can't start. */
+    private var forwardOnUnlock = false
+    private val unlockReceiver = object : BroadcastReceiver() {
+        override fun onReceive(context: Context, intent: Intent) {
+            if (forwardOnUnlock) forwardHome(Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME))
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        ContextCompat.registerReceiver(
+            this, unlockReceiver, IntentFilter(Intent.ACTION_USER_UNLOCKED), ContextCompat.RECEIVER_NOT_EXPORTED,
+        )
         // Set even when forwarding, so something sensible sits behind the other launcher.
         setContent { LumiTheme { HandheldScreen(prefs) } }
         forwardHome(intent)
+    }
+
+    override fun onDestroy() {
+        unregisterReceiver(unlockReceiver)
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -79,11 +101,18 @@ class HomeActivity : ComponentActivity() {
             .addCategory(Intent.CATEGORY_HOME)
             .setComponent(target)
             .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        val unlocked = getSystemService(UserManager::class.java).isUserUnlocked
+        forwardOnUnlock = false
         if (packageManager.resolveActivity(launch, 0) == null) {
-            prefs.handheldLauncher = null // uninstalled
+            // Before unlock, launchers that aren't direct-boot aware look missing too.
+            if (unlocked) prefs.handheldLauncher = null else forwardOnUnlock = true
             return
         }
-        startActivity(launch, ActivityOptions.makeCustomAnimation(this, 0, 0).toBundle())
+        try {
+            startActivity(launch, ActivityOptions.makeCustomAnimation(this, 0, 0).toBundle())
+        } catch (_: ActivityNotFoundException) {
+            forwardOnUnlock = !unlocked
+        }
     }
 }
 
@@ -122,7 +151,7 @@ private fun HandheldScreen(prefs: LumiPrefs) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            Image(painterResource(R.mipmap.ic_launcher), contentDescription = null, modifier = Modifier.size(48.dp))
+            LumiLogo(size = 48.dp)
             Spacer(Modifier.width(14.dp))
             Column {
                 Text("LumiDeck", fontSize = 24.sp, fontWeight = FontWeight.SemiBold, color = LumiColors.Text)
