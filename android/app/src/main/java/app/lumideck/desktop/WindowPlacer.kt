@@ -31,8 +31,8 @@ class WindowPlacer(private val activity: Activity) {
         val metrics = activity.resources.displayMetrics
         val density = metrics.density
         val screenW = metrics.widthPixels
-        // Keep windows clear of the taskbar (and the system nav bar under it) until the
-        // taskbar becomes an always-on-top overlay.
+        // Open windows clear of the taskbar (and the system nav bar under it), which
+        // stays on top and would otherwise cover their bottom edge.
         val navBar = ViewCompat.getRootWindowInsets(activity.window.decorView)
             ?.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
         val reserved = navBar + ((LumiDimens.TaskbarHeight.value + LumiDimens.TaskbarMargin.value * 2) * density).toInt()

@@ -3,6 +3,7 @@ package app.lumideck
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
+import android.os.SystemClock
 import android.view.KeyEvent
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
@@ -14,6 +15,10 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
 import app.lumideck.desktop.DesktopScreen
+import app.lumideck.desktop.MenuLayer
+import app.lumideck.desktop.MetaTap
+import app.lumideck.desktop.TaskbarLayer
+import app.lumideck.desktop.TaskbarOverlay
 import app.lumideck.desktop.WindowPlacer
 import app.lumideck.ui.LumiTheme
 
@@ -21,9 +26,10 @@ import app.lumideck.ui.LumiTheme
 class DesktopActivity : ComponentActivity() {
     private val menuOpen = mutableStateOf(false)
     private val windows = WindowPlacer(this)
-
-    /** True while a Meta key is held and no other key has been pressed with it. */
-    private var metaAlone = false
+    private val overlay = TaskbarOverlay(this, onMetaTap = ::onMetaTap, onBack = { menuOpen.value = false })
+    private val overlayShown = mutableStateOf(false)
+    private val metaTap = MetaTap(::onMetaTap)
+    private var lastMetaTap = 0L
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Android gives every desktop-mode display its own navigation bar. The desktop hides
@@ -45,6 +51,7 @@ class DesktopActivity : ComponentActivity() {
         setContent {
             LumiTheme {
                 DesktopScreen(
+                    showShell = !overlayShown.value,
                     menuOpen = menuOpen.value,
                     onMenuOpenChange = { menuOpen.value = it },
                     onLaunch = windows::launch,
@@ -58,24 +65,45 @@ class DesktopActivity : ComponentActivity() {
         }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Also picks up "Display over other apps" being allowed while the desktop was open.
+        overlayShown.value = overlay.show(
+            taskbarContent = {
+                LumiTheme {
+                    TaskbarLayer(menuOpen.value, { menuOpen.value = it }, windows::launch)
+                }
+            },
+            menuContent = { onShownChange ->
+                LumiTheme {
+                    MenuLayer(menuOpen.value, { menuOpen.value = it }, windows::launch, onShownChange)
+                }
+            },
+        )
+    }
+
+    override fun onDestroy() {
+        overlay.hide()
+        super.onDestroy()
+    }
+
     /** Home pressed while the desktop is already showing. */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         menuOpen.value = false
     }
 
-    /** Tapping Meta on its own toggles the menu, like Super on Plasma. */
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        val isMeta = event.keyCode == KeyEvent.KEYCODE_META_LEFT || event.keyCode == KeyEvent.KEYCODE_META_RIGHT
-        when {
-            isMeta && event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0 -> metaAlone = true
-            isMeta && event.action == KeyEvent.ACTION_UP -> {
-                if (metaAlone) menuOpen.value = !menuOpen.value
-                metaAlone = false
-                return true
-            }
-            !isMeta && event.action == KeyEvent.ACTION_DOWN -> metaAlone = false
-        }
-        return super.dispatchKeyEvent(event)
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
+        metaTap.onKey(event) || super.dispatchKeyEvent(event)
+
+    /**
+     * Tapping Meta on its own toggles the menu, like Super on Plasma. One press can arrive
+     * both as a key and as the assistant signal (see [TaskbarOverlay]), so ignore repeats.
+     */
+    private fun onMetaTap() {
+        val now = SystemClock.uptimeMillis()
+        if (now - lastMetaTap < 300) return
+        lastMetaTap = now
+        menuOpen.value = !menuOpen.value
     }
 }

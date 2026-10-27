@@ -56,6 +56,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 
 - **Logo button** or **Meta (Windows key)**: open or close the app menu. Type to search, press **Enter** to open the first result, **Esc** to close.
 - **Right-click or long-press** an app in the menu to pin it to the taskbar. Right-click a pinned app to unpin it.
+- The taskbar stays above app windows, even maximised ones. This needs Android's "Display over other apps" permission, which the setup script and the PC client grant; without it the taskbar sits behind apps.
 - In the PC window, scrcpy's own shortcuts use **Right Ctrl** (for example, Right Ctrl+F toggles fullscreen).
 
 ## Repo layout
@@ -70,7 +71,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 ## Roadmap
 
 - [x] **Phase 0:** desktop app with floating taskbar, app menu, pinned apps, battery and clock; Windows client using scrcpy
-- [ ] **Phase 1:** taskbar as an always-on-top overlay, app tooltips, settings
+- [ ] **Phase 1:** ~~taskbar as an always-on-top overlay~~ (done), app tooltips, settings
 - [ ] **Phase 2:** polished Windows client: tray icon, auto-connect, clipboard and file drag-and-drop
 - [ ] **Phase 3:** window management: running apps in the taskbar; focus, minimise, maximise and close (via ADB on PC, Shizuku on a monitor)
 - [ ] **Phase 4:** native Rust client, Wi-Fi mode

@@ -34,6 +34,10 @@ if ($homeRole -and $homeRole.Context.PostContext -match "holders=$LumiPackage") 
     adb -s $serial shell cmd role add-role-holder android.app.role.HOME $LumiPackage | Out-Null
 }
 
+# Lets the taskbar stay above app windows ("Display over other apps"). Also set by
+# setup-device.ps1; repeated here for installs made before the taskbar needed it.
+adb -s $serial shell appops set $LumiPackage SYSTEM_ALERT_WINDOW allow | Out-Null
+
 $env:SCRCPY_ICON_DIR = Join-Path $PSScriptRoot 'icons'
 
 # Android draws its own navigation bar along the bottom of the desktop and forces it on

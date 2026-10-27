@@ -1,6 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
+    <!-- Keeps the taskbar above app windows (granted by scripts/setup-device.ps1). -->
+    <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
+
     <!-- Needed to list and launch every app from the app menu. -->
     <queries>
         <intent>
