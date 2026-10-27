@@ -1,5 +1,6 @@
 package app.lumideck
 
+import android.Manifest
 import android.app.ActivityOptions
 import android.content.ActivityNotFoundException
 import android.content.BroadcastReceiver
@@ -9,12 +10,15 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.hardware.display.DisplayManager
+import android.os.Build
 import android.os.Bundle
 import android.os.UserManager
 import android.provider.Settings
 import android.view.Display
 import androidx.activity.ComponentActivity
+import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -38,6 +42,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -79,7 +84,9 @@ class HomeActivity : ComponentActivity() {
             this, unlockReceiver, IntentFilter(Intent.ACTION_USER_UNLOCKED), ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         // Set even when forwarding, so something sensible sits behind the other launcher.
-        setContent { LumiTheme { HandheldScreen(prefs) } }
+        // Only ask for permissions when opened from the app drawer, not on the way to it.
+        val openedByUser = !intent.hasCategory(Intent.CATEGORY_HOME)
+        setContent { LumiTheme { HandheldScreen(prefs, askForNotifications = openedByUser) } }
         forwardHome(intent)
     }
 
@@ -119,18 +126,29 @@ class HomeActivity : ComponentActivity() {
 private data class LauncherOption(val component: ComponentName, val label: String, val icon: android.graphics.drawable.Drawable)
 
 @Composable
-private fun HandheldScreen(prefs: LumiPrefs) {
+private fun HandheldScreen(prefs: LumiPrefs, askForNotifications: Boolean) {
     val context = LocalContext.current
     val pm = context.packageManager
     val homeIntent = remember { Intent(Intent.ACTION_MAIN).addCategory(Intent.CATEGORY_HOME) }
 
-    var isDefaultHome by remember { mutableStateOf(false) }
+    var home by remember { mutableStateOf<HomeCheck.Result?>(null) }
     var launchers by remember { mutableStateOf(emptyList<LauncherOption>()) }
     var selected by remember { mutableStateOf(prefs.handheldLauncher) }
 
+    // For the warning when Android stops using LumiDeck as home (see HomeCheck).
+    val notificationPermission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { }
+    LaunchedEffect(Unit) {
+        if (askForNotifications && Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(context, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+    }
+
     LifecycleResumeEffect(Unit) {
-        isDefaultHome = pm.resolveActivity(homeIntent, PackageManager.MATCH_DEFAULT_ONLY)
-            ?.activityInfo?.packageName == context.packageName
+        home = HomeCheck.check(context)
+        // Clears the warning once it's fixed.
+        HomeCheck.checkAndNotify(context)
         launchers = pm.queryIntentActivities(homeIntent, 0)
             .map { it.activityInfo }
             // Skip ourselves and Settings' "FallbackHome" placeholder.
@@ -160,9 +178,28 @@ private fun HandheldScreen(prefs: LumiPrefs) {
         }
 
         Section("1 · Default home app") {
-            if (isDefaultHome) {
+            val status = home?.status
+            if (status == HomeCheck.Status.Ok) {
                 Text("✓ LumiDeck is the default home app.", color = LumiColors.Mist)
-            } else {
+            } else if (status == HomeCheck.Status.Lost) {
+                val instead = home?.launcher ?: "another launcher"
+                Text(
+                    "LumiDeck is set as the home app, but Android opens $instead instead, so a monitor " +
+                        "or your PC would show $instead rather than the desktop. Some devices do this " +
+                        "after a restart.",
+                    color = LumiColors.Warning,
+                )
+                Spacer(Modifier.size(8.dp))
+                Text(
+                    "To fix it, open home app settings, pick any other launcher, then pick LumiDeck " +
+                        "again. Or plug into your PC: the LumiDeck client fixes it when it starts.",
+                    color = LumiColors.TextDim,
+                )
+                Spacer(Modifier.size(8.dp))
+                Button(onClick = { context.startActivity(Intent(Settings.ACTION_HOME_SETTINGS)) }) {
+                    Text("Open home app settings")
+                }
+            } else if (status == HomeCheck.Status.NotHome) {
                 Text(
                     "Android only shows LumiDeck on external screens when it's the default home app. " +
                         "Pick a handheld launcher below first, so this screen still looks normal.",

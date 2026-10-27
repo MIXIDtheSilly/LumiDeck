@@ -8,6 +8,7 @@ import android.content.IntentFilter
 import android.content.pm.LauncherApps
 import android.os.Handler
 import android.os.Looper
+import android.os.Process
 import android.os.UserHandle
 import android.os.UserManager
 import androidx.compose.runtime.Composable
@@ -20,6 +21,7 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.dp
 import androidx.core.content.ContextCompat
 import androidx.core.graphics.drawable.toBitmap
+import app.lumideck.SettingsActivity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.withContext
@@ -37,7 +39,7 @@ private fun loadApps(context: Context, iconSizePx: Int): List<AppEntry> {
     val launcherApps = context.getSystemService(LauncherApps::class.java)
     val userManager = context.getSystemService(UserManager::class.java)
     val density = context.resources.displayMetrics.densityDpi
-    return launcherApps.profiles.flatMap { user ->
+    val apps = launcherApps.profiles.flatMap { user ->
         val serial = userManager.getSerialNumberForUser(user)
         launcherApps.getActivityList(null, user)
             .filter { it.componentName.packageName != context.packageName }
@@ -50,7 +52,22 @@ private fun loadApps(context: Context, iconSizePx: Int): List<AppEntry> {
                     icon = info.getBadgedIcon(density).toBitmap(iconSizePx, iconSizePx).asImageBitmap(),
                 )
             }
-    }.sortedBy { it.label.lowercase() }
+    }
+    return (apps + settingsEntry(context, userManager, iconSizePx)).sortedBy { it.label.lowercase() }
+}
+
+/** LumiDeck's own settings, listed like an app so it can be found, pinned and shown in the taskbar. */
+private fun settingsEntry(context: Context, userManager: UserManager, iconSizePx: Int): AppEntry {
+    val component = ComponentName(context, SettingsActivity::class.java)
+    val user = Process.myUserHandle()
+    return AppEntry(
+        key = "${component.flattenToString()}#${userManager.getSerialNumberForUser(user)}",
+        label = "Desktop Settings",
+        component = component,
+        user = user,
+        icon = context.packageManager.getApplicationIcon(context.applicationInfo)
+            .toBitmap(iconSizePx, iconSizePx).asImageBitmap(),
+    )
 }
 
 /** Every launchable app, reloaded whenever a package is installed, removed or updated. */
@@ -73,8 +90,11 @@ fun rememberInstalledApps(): State<List<AppEntry>> {
         val unlockReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) { changes.trySend(Unit) }
         }
+        // On the app, not the activity: Android drops an activity's receivers when it's
+        // destroyed, before Compose gets to unregister them, and unregistering then throws.
+        val app = context.applicationContext
         ContextCompat.registerReceiver(
-            context, unlockReceiver, IntentFilter(Intent.ACTION_USER_UNLOCKED), ContextCompat.RECEIVER_NOT_EXPORTED,
+            app, unlockReceiver, IntentFilter(Intent.ACTION_USER_UNLOCKED), ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         try {
             while (true) {
@@ -83,7 +103,7 @@ fun rememberInstalledApps(): State<List<AppEntry>> {
             }
         } finally {
             launcherApps.unregisterCallback(callback)
-            context.unregisterReceiver(unlockReceiver)
+            app.unregisterReceiver(unlockReceiver)
         }
     }
 }

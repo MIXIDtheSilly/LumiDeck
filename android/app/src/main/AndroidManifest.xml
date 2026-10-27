@@ -4,6 +4,10 @@
     <!-- Keeps the taskbar above app windows (granted by scripts/setup-device.ps1). -->
     <uses-permission android:name="android.permission.SYSTEM_ALERT_WINDOW" />
 
+    <!-- Checking after each boot that Android still uses LumiDeck as home (HomeCheck.kt). -->
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
+    <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+
     <!-- Needed to list and launch every app from the app menu. -->
     <queries>
         <intent>
@@ -72,6 +76,29 @@
                 <category android:name="android.intent.category.DEFAULT" />
             </intent-filter>
         </activity>
+
+        <!--
+            The desktop's settings, opened as a window on the desktop. Its own task
+            affinity keeps it out of the desktop's task, so it gets a window of its own.
+        -->
+        <activity
+            android:name=".SettingsActivity"
+            android:directBootAware="true"
+            android:exported="false"
+            android:label="Desktop Settings"
+            android:launchMode="singleTask"
+            android:resizeableActivity="true"
+            android:taskAffinity="app.lumideck.settings"
+            android:theme="@style/Theme.LumiDeck.Settings" />
+
+        <receiver
+            android:name=".HomeCheckReceiver"
+            android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!--
             Where the window helper (helper/WindowHelper.kt), started over ADB, connects

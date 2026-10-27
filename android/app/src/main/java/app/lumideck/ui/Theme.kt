@@ -40,11 +40,10 @@ object DeskColors {
     val Warning = Color(0xFFD2503F)
 }
 
+/** The taskbar's height and icon size are settings: see [app.lumideck.data.TaskbarSize]. */
 object LumiDimens {
-    val TaskbarHeight = 44.dp
     /** Gap between the floating taskbar and the screen edges. */
     val TaskbarMargin = 8.dp
-    val TaskbarIcon = 28.dp
     val MenuGap = 6.dp
 }
 

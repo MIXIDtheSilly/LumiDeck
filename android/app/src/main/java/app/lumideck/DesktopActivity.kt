@@ -1,5 +1,6 @@
 package app.lumideck
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.graphics.Color
 import android.os.Bundle
@@ -65,7 +66,7 @@ class DesktopActivity : ComponentActivity() {
         super.onResume()
         // Also picks up "Display over other apps" being allowed while the desktop was open.
         overlayShown.value = overlay.show(
-            taskbarContent = { LumiTheme { TaskbarLayer(state, windows) } },
+            taskbarContent = { LumiTheme { TaskbarLayer(state, windows, onHeightChange = overlay::setTaskbarHeight) } },
             menuContent = { onShownChange -> LumiTheme { MenuLayer(state, windows, onShownChange) } },
         )
     }
@@ -81,8 +82,16 @@ class DesktopActivity : ComponentActivity() {
         state.closeMenus()
     }
 
-    override fun dispatchKeyEvent(event: KeyEvent): Boolean =
-        metaTap.onKey(event) || super.dispatchKeyEvent(event)
+    // This is Activity's public key-dispatch override; AndroidX marks its implementation restricted.
+    @SuppressLint("RestrictedApi")
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        // Esc closes the menus, as it does in the overlay (see TaskbarOverlay).
+        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE && (state.menuOpen || state.taskMenu != null)) {
+            if (event.action == KeyEvent.ACTION_UP) state.closeMenus()
+            return true
+        }
+        return metaTap.onKey(event) || super.dispatchKeyEvent(event)
+    }
 
     /**
      * Tapping Meta on its own toggles the menu, like Super on Plasma. One press can arrive

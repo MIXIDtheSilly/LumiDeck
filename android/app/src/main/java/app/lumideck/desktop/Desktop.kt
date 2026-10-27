@@ -7,7 +7,9 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
+import android.graphics.BitmapFactory
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
@@ -23,10 +25,14 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.layout.layout
@@ -34,19 +40,28 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.Dp
 import app.lumideck.R
 import app.lumideck.data.AppEntry
+import app.lumideck.data.PanelFloat
+import app.lumideck.data.Wallpaper
+import app.lumideck.data.rememberDesktopSettings
 import app.lumideck.data.rememberInstalledApps
 import app.lumideck.data.rememberLumiPrefs
 import app.lumideck.data.rememberPinnedKeys
 import app.lumideck.helper.HelperLink
 import app.lumideck.ui.LumiDimens
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 import kotlin.math.roundToInt
 
 /** The desktop's menus, shared by the windows it's drawn in (see [TaskbarOverlay]). */
 class DesktopState {
     var menuOpen by mutableStateOf(false)
 
-    /** The taskbar button whose right-click menu is open. */
+    /** The open right-click menu on the taskbar. */
     var taskMenu by mutableStateOf<TaskMenuAnchor?>(null)
+
+    /** The taskbar is attached to the screen edge rather than floating. */
+    var panelAttached by mutableStateOf(false)
 
     fun toggleMenu() {
         val open = !menuOpen
@@ -60,18 +75,16 @@ class DesktopState {
     }
 }
 
-/** A right-click menu for the taskbar button [key], centred [x] pixels from the left of the screen. */
-data class TaskMenuAnchor(val key: String, val x: Float)
+/**
+ * A right-click menu for the taskbar button [key], or for the taskbar itself if [key] is
+ * null, centred [x] pixels from the left of the screen.
+ */
+data class TaskMenuAnchor(val key: String?, val x: Float)
 
 /** The desktop itself: the wallpaper, plus the taskbar and menus unless [TaskbarOverlay] shows them. */
 @Composable
 fun DesktopScreen(showShell: Boolean, state: DesktopState, windows: Windows) {
-    Image(
-        painterResource(R.drawable.wallpaper),
-        contentDescription = null,
-        contentScale = ContentScale.Crop,
-        modifier = Modifier.fillMaxSize(),
-    )
+    WallpaperImage(rememberDesktopSettings(rememberLumiPrefs()).wallpaper)
     if (showShell) {
         // The taskbar goes over the menus' click-outside area, so its logo still closes the menu.
         MenuLayer(state, windows)
@@ -79,15 +92,59 @@ fun DesktopScreen(showShell: Boolean, state: DesktopState, windows: Windows) {
     }
 }
 
-/** The taskbar, along the bottom of the screen. */
 @Composable
-fun TaskbarLayer(state: DesktopState, windows: Windows) {
+private fun WallpaperImage(wallpaper: Wallpaper) {
+    val fill = Modifier.fillMaxSize()
+    when (wallpaper) {
+        Wallpaper.Builtin -> Image(painterResource(R.drawable.wallpaper), null, fill, contentScale = ContentScale.Crop)
+        is Wallpaper.Plain -> Box(fill.background(Color(wallpaper.argb)))
+        is Wallpaper.Picture -> {
+            // Null while it loads, which shows the window's background colour.
+            val picture by produceState<Result<ImageBitmap>?>(null, wallpaper.file) {
+                value = withContext(Dispatchers.IO) {
+                    runCatching { BitmapFactory.decodeFile(wallpaper.file.path)!!.asImageBitmap() }
+                }
+            }
+            picture?.let { result ->
+                val bitmap = result.getOrNull()
+                if (bitmap != null) Image(bitmap, null, fill, contentScale = ContentScale.Crop) else WallpaperImage(Wallpaper.Builtin)
+            }
+        }
+    }
+}
+
+/**
+ * The taskbar, along the bottom of the screen. [onHeightChange] gets how much of the screen
+ * it takes up, which changes with its size setting and when it attaches to the edge.
+ */
+@Composable
+fun TaskbarLayer(state: DesktopState, windows: Windows, onHeightChange: (Dp) -> Unit = {}) {
     val apps by rememberInstalledApps()
-    val pinnedKeys = rememberPinnedKeys(rememberLumiPrefs())
+    val prefs = rememberLumiPrefs()
+    val pinnedKeys = rememberPinnedKeys(prefs)
+    val settings = rememberDesktopSettings(prefs)
     val items = rememberTaskbarItems(apps, pinnedKeys, windows)
+    val attached = when (settings.panelFloat) {
+        PanelFloat.Always -> false
+        PanelFloat.Never -> true
+        PanelFloat.Adaptive -> items.any { item -> item.windows.any(windows::reachesPanel) }
+    }
+    SideEffect { state.panelAttached = attached }
+    // Floating height while it floats and while it slides between the two, so it's never cut off.
+    var settled by remember { mutableStateOf(attached) }
+    LaunchedEffect(attached) {
+        if (attached) delay(PanelAnimationMs.toLong())
+        settled = attached
+    }
+    val height = panelFootprint(settings.taskbarSize, attached = attached && settled)
+    SideEffect { onHeightChange(height) }
+
     BottomLayer {
         Taskbar(
             items = items,
+            size = settings.taskbarSize,
+            clock = settings.clock,
+            attached = attached,
             menuOpen = state.menuOpen,
             onLogoClick = state::toggleMenu,
             onClick = { item ->
@@ -99,6 +156,11 @@ fun TaskbarLayer(state: DesktopState, windows: Windows) {
                 state.closeMenus()
                 state.taskMenu = TaskMenuAnchor(item.key, x)
             },
+            onPanelSecondaryClick = { x ->
+                state.closeMenus()
+                state.taskMenu = TaskMenuAnchor(null, x)
+            },
+            onReorder = prefs::reorderPins,
             modifier = Modifier.align(Alignment.BottomCenter),
         )
     }
@@ -114,19 +176,22 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
     val apps by rememberInstalledApps()
     val prefs = rememberLumiPrefs()
     val pinnedKeys = rememberPinnedKeys(prefs)
+    val settings = rememberDesktopSettings(prefs)
     val items = rememberTaskbarItems(apps, pinnedKeys, windows)
+    val aboveTaskbar = panelFootprint(settings.taskbarSize, state.panelAttached) + LumiDimens.MenuGap
     val menuState = remember { MutableTransitionState(false) }.apply { targetState = state.menuOpen }
     val anchor = state.taskMenu
-    val taskItem = anchor?.let { items.firstOrNull { it.key == anchor.key } }
-    val shown = menuState.currentState || menuState.targetState || taskItem != null
+    val taskItem = anchor?.key?.let { key -> items.firstOrNull { it.key == key } }
+    val panelMenu = anchor != null && anchor.key == null
+    val shown = menuState.currentState || menuState.targetState || taskItem != null || panelMenu
     SideEffect { onShownChange(shown) }
     // The app closed or was unpinned while its menu was open.
     LaunchedEffect(anchor, taskItem == null) {
-        if (anchor != null && taskItem == null) state.taskMenu = null
+        if (anchor?.key != null && taskItem == null) state.taskMenu = null
     }
 
     BottomLayer {
-        if (state.menuOpen || taskItem != null) {
+        if (state.menuOpen || taskItem != null || panelMenu) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -141,7 +206,7 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
             exit = fadeOut(tween(MenuAnimationMs)) + slideOutVertically(tween(MenuAnimationMs)) { it / 12 },
             modifier = Modifier
                 .align(Alignment.BottomStart)
-                .padding(start = LumiDimens.TaskbarMargin, bottom = AboveTaskbar),
+                .padding(start = LumiDimens.TaskbarMargin, bottom = aboveTaskbar),
         ) {
             AppMenu(
                 apps = apps,
@@ -155,14 +220,18 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
             )
         }
 
-        if (anchor != null && taskItem != null) {
+        if (anchor != null && (taskItem != null || panelMenu)) {
             TaskMenu(
-                title = taskItem.label,
-                actions = taskActions(taskItem, windows, prefs),
+                title = taskItem?.label ?: "Taskbar",
+                actions = if (taskItem != null) {
+                    taskActions(taskItem, windows, prefs)
+                } else {
+                    panelActions(items.flatMap { it.windows }, windows)
+                },
                 onDismiss = state::closeMenus,
                 modifier = Modifier
                     .align(Alignment.BottomStart)
-                    .padding(bottom = AboveTaskbar)
+                    .padding(bottom = aboveTaskbar)
                     .centredAt(anchor.x, LumiDimens.TaskbarMargin),
             )
         }
@@ -170,9 +239,6 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
 }
 
 private const val MenuAnimationMs = 110
-
-/** Menus open this far above the bottom of the screen, clear of the taskbar. */
-private val AboveTaskbar = LumiDimens.TaskbarMargin * 2 + LumiDimens.TaskbarHeight + LumiDimens.MenuGap
 
 /** The taskbar's buttons: pinned apps and, while the window helper runs, the apps open on this display. */
 @Composable

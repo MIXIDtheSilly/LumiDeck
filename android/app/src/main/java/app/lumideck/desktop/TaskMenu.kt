@@ -22,6 +22,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import app.lumideck.data.LumiPrefs
+import app.lumideck.helper.TaskWindow
 import app.lumideck.ui.DeskColors
 import app.lumideck.ui.ItemShape
 import app.lumideck.ui.PanelShape
@@ -47,6 +48,12 @@ fun taskActions(item: TaskbarItem, windows: Windows, prefs: LumiPrefs): List<Men
         val count = item.windows.size
         add(MenuAction(if (count > 1) "Close $count windows" else "Close") { item.windows.forEach(windows::close) })
     }
+}
+
+/** What the right-click menu on an empty part of the taskbar offers. [open] is every window on the desktop. */
+fun panelActions(open: List<TaskWindow>, windows: Windows): List<MenuAction> = buildList {
+    if (open.any { it.visible }) add(MenuAction("Show desktop") { windows.showDesktop(open) })
+    add(MenuAction("Desktop settings") { windows.openSettings() })
 }
 
 /** A taskbar button's right-click menu, Plasma-style: the app's name, then a short list. */

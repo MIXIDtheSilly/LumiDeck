@@ -29,13 +29,14 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import app.lumideck.data.ClockFormat
 import app.lumideck.ui.DeskColors
 import kotlinx.coroutines.delay
 import java.util.Date
 import java.util.Locale
 
 @Composable
-fun Clock(modifier: Modifier = Modifier) {
+fun Clock(format: ClockFormat, modifier: Modifier = Modifier) {
     val context = LocalContext.current
     val now by produceState(System.currentTimeMillis()) {
         while (true) {
@@ -43,8 +44,12 @@ fun Clock(modifier: Modifier = Modifier) {
             delay(1000 - value % 1000)
         }
     }
-    // Recomputed each tick so a change to the 24-hour setting shows up straight away.
-    val time = DateFormat.getTimeFormat(context).format(Date(now))
+    val time = when (format) {
+        // Recomputed each tick so a change to the device's 24-hour setting shows up straight away.
+        ClockFormat.System -> DateFormat.getTimeFormat(context).format(Date(now))
+        ClockFormat.H12 -> DateFormat.format(remember { DateFormat.getBestDateTimePattern(Locale.getDefault(), "hm") }, now)
+        ClockFormat.H24 -> DateFormat.format(remember { DateFormat.getBestDateTimePattern(Locale.getDefault(), "Hm") }, now)
+    }.toString()
     val datePattern = remember { DateFormat.getBestDateTimePattern(Locale.getDefault(), "EEEdMMM") }
     Column(modifier, horizontalAlignment = Alignment.End) {
         Text(time, color = DeskColors.Text, fontSize = 14.sp, fontWeight = FontWeight.Medium, lineHeight = 16.sp)
@@ -76,11 +81,13 @@ fun BatteryIndicator(modifier: Modifier = Modifier) {
                 value = intent.toBatteryState()
             }
         }
+        // On the app, as in rememberInstalledApps.
+        val app = context.applicationContext
         val sticky = ContextCompat.registerReceiver(
-            context, receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
+            app, receiver, IntentFilter(Intent.ACTION_BATTERY_CHANGED), ContextCompat.RECEIVER_NOT_EXPORTED,
         )
         value = sticky?.toBatteryState()
-        awaitDispose { context.unregisterReceiver(receiver) }
+        awaitDispose { app.unregisterReceiver(receiver) }
     }
     val state = battery ?: return
     val color = when {

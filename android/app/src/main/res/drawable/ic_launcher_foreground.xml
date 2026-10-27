@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Glyph centred in the 72dp safe zone of a 108dp adaptive icon. -->
+<!-- Glyph centred in the 72dp safe zone of a 108dp adaptive icon (33dp in from each edge).
+     A fraction, so it scales when the icon is drawn small. -->
 <inset xmlns:android="http://schemas.android.com/apk/res/android"
     android:drawable="@drawable/ic_lumideck_glyph"
-    android:inset="33dp" />
+    android:inset="30.5%" />

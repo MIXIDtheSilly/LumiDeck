@@ -15,8 +15,7 @@ import android.widget.FrameLayout
 import androidx.annotation.Keep
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.platform.ComposeView
-import androidx.core.view.ViewCompat
-import androidx.core.view.WindowInsetsCompat
+import androidx.compose.ui.unit.Dp
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleOwner
 import androidx.lifecycle.LifecycleRegistry
@@ -24,7 +23,7 @@ import androidx.lifecycle.setViewTreeLifecycleOwner
 import androidx.savedstate.SavedStateRegistryController
 import androidx.savedstate.SavedStateRegistryOwner
 import androidx.savedstate.setViewTreeSavedStateRegistryOwner
-import app.lumideck.ui.LumiDimens
+import app.lumideck.data.LumiPrefs
 import kotlin.math.ceil
 
 /**
@@ -48,7 +47,7 @@ class TaskbarOverlay(
     private val owner = AlwaysResumed()
     private var taskbar: View? = null
     private var menu: View? = null
-    private var navBar = 0
+    private var taskbarHeight = Dp.Unspecified
 
     /**
      * Shows [taskbarContent] and [menuContent] above app windows. [menuContent] reports
@@ -61,20 +60,11 @@ class TaskbarOverlay(
     ): Boolean {
         if (taskbar != null) return true
         if (!Settings.canDrawOverlays(activity)) return false
+        if (taskbarHeight == Dp.Unspecified) taskbarHeight = panelFootprint(LumiPrefs(activity).taskbarSize, attached = false)
 
         val taskbar = TaskbarRoot().host { taskbarContent() }
         val menu = MenuRoot().host { menuContent(::setMenuShown) }
         menu.visibility = View.GONE
-        // The taskbar window overlaps the system navigation bar; grow it by the bar's height
-        // so the taskbar sits just above the bar, where it sits on the desktop itself.
-        ViewCompat.setOnApplyWindowInsetsListener(taskbar) { _, insets ->
-            val bar = insets.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars()).bottom
-            if (bar != navBar) {
-                navBar = bar
-                if (taskbar.isAttachedToWindow) windowManager.updateViewLayout(taskbar, taskbarParams())
-            }
-            insets
-        }
         try {
             windowManager.addView(taskbar, taskbarParams())
             this.taskbar = taskbar
@@ -97,14 +87,35 @@ class TaskbarOverlay(
         menu = null
     }
 
+    /**
+     * Fits the taskbar window to the taskbar, which takes [height] above the navigation bar.
+     * The taskbar is drawn along the window's bottom edge and the window is anchored there,
+     * so it stays put on screen even if the window resizes a frame late.
+     */
+    fun setTaskbarHeight(height: Dp) {
+        if (height == taskbarHeight) return
+        taskbarHeight = height
+        taskbar?.let { if (it.isAttachedToWindow) windowManager.updateViewLayout(it, taskbarParams()) }
+    }
+
     private fun setMenuShown(shown: Boolean) {
         menu?.visibility = if (shown) View.VISIBLE else View.GONE
     }
 
+    /**
+     * The taskbar window overlaps the system navigation bar, which the taskbar sits above,
+     * so it's that much taller. The bar's height comes from the desktop's full-screen window:
+     * the taskbar window's own insets only count the part of the bar it already overlaps.
+     */
     private fun taskbarParams(): LayoutParams {
         val density = activity.resources.displayMetrics.density
-        val height = ceil((LumiDimens.TaskbarHeight + LumiDimens.TaskbarMargin * 2).value * density).toInt()
-        return overlayParams(height + navBar, LayoutParams.FLAG_NOT_FOCUSABLE).apply { title = "LumiDeck taskbar" }
+        val navBar = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            windowManager.currentWindowMetrics.windowInsets.getInsetsIgnoringVisibility(WindowInsets.Type.navigationBars()).bottom
+        } else {
+            0
+        }
+        val height = ceil(taskbarHeight.value * density).toInt() + navBar
+        return overlayParams(height, LayoutParams.FLAG_NOT_FOCUSABLE).apply { title = "LumiDeck taskbar" }
     }
 
     private fun menuParams() = overlayParams(LayoutParams.MATCH_PARENT, 0).apply { title = "LumiDeck menu" }
@@ -153,12 +164,12 @@ class TaskbarOverlay(
         }
     }
 
-    /** Gets the keys while the menu is open. */
+    /** Gets the keys while a menu is open. Back and Esc close it. */
     private inner class MenuRoot : FrameLayout(activity) {
         private val metaTap = MetaTap(onMetaTap)
 
         override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-            if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.keyCode == KeyEvent.KEYCODE_BACK || event.keyCode == KeyEvent.KEYCODE_ESCAPE) {
                 if (event.action == KeyEvent.ACTION_UP) onBack()
                 return true
             }

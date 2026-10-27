@@ -1,33 +1,43 @@
 package app.lumideck.desktop
 
 import android.os.UserHandle
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.hoverable
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.Stable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableFloatStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -35,21 +45,28 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.boundsInWindow
 import androidx.compose.ui.layout.onGloballyPositioned
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.zIndex
 import app.lumideck.R
 import app.lumideck.data.AppEntry
+import app.lumideck.data.ClockFormat
+import app.lumideck.data.TaskbarSize
 import app.lumideck.helper.TaskWindow
 import app.lumideck.ui.DeskColors
 import app.lumideck.ui.ItemShape
 import app.lumideck.ui.LumiColors
 import app.lumideck.ui.LumiDimens
-import app.lumideck.ui.PanelShape
 import app.lumideck.ui.onSecondaryClick
+import app.lumideck.ui.onSecondaryClickAt
 
 /** A taskbar button: a pinned app, a running one, or both. */
 class TaskbarItem(
@@ -96,29 +113,53 @@ fun taskbarItems(apps: List<AppEntry>, pinnedKeys: List<String>, windows: List<T
 /** Android gives each user a block of this many uids. */
 private const val PER_USER_UID_RANGE = 100_000
 
+/** How much of the bottom of the screen the taskbar takes up, above the system navigation bar. */
+fun panelFootprint(size: TaskbarSize, attached: Boolean): Dp =
+    if (attached) size.height else size.height + LumiDimens.TaskbarMargin * 2
+
 /**
- * The floating panel, Plasma-style: logo on the left, then pinned and running apps, tray
- * and clock on the right. [onSecondaryClick] gets the button's centre, in pixels from the
- * left of the window.
+ * The panel, Plasma-style: logo on the left, then pinned and running apps, tray and clock
+ * on the right. It floats clear of the screen edges, and slides onto the bottom edge while
+ * [attached]. Pinned apps can be dragged into a new order, which goes to [onReorder].
+ * [onSecondaryClick] gets the button's centre, and [onPanelSecondaryClick] the pointer's
+ * position, in pixels from the left of the window.
  */
 @Composable
 fun Taskbar(
     items: List<TaskbarItem>,
+    size: TaskbarSize,
+    clock: ClockFormat,
+    attached: Boolean,
     menuOpen: Boolean,
     onLogoClick: () -> Unit,
     onClick: (TaskbarItem) -> Unit,
     onSecondaryClick: (TaskbarItem, centerX: Float) -> Unit,
+    onPanelSecondaryClick: (x: Float) -> Unit,
+    onReorder: (pinnedKeys: List<String>) -> Unit,
     modifier: Modifier = Modifier,
 ) {
+    val attach by animateFloatAsState(if (attached) 1f else 0f, tween(PanelAnimationMs), label = "attach")
+    val shape = RoundedCornerShape(PanelCorner * (1 - attach))
+    val tooltips = remember { TooltipState() }
+    LaunchedEffect(tooltips) { tooltips.run() }
+    val drag = remember { PinDrag() }
+    val currentItems by rememberUpdatedState(items)
+    val currentOnReorder by rememberUpdatedState(onReorder)
+    var panelLeft by remember { mutableFloatStateOf(0f) }
+
     Row(
         modifier
             .fillMaxWidth()
-            .padding(LumiDimens.TaskbarMargin)
-            .height(LumiDimens.TaskbarHeight)
-            .shadow(6.dp, PanelShape)
-            .clip(PanelShape)
+            .padding(LumiDimens.TaskbarMargin * (1 - attach))
+            .height(size.height)
+            .shadow(6.dp, shape)
+            .clip(shape)
             .background(DeskColors.Panel)
-            .border(1.dp, DeskColors.Border, PanelShape)
+            .border(1.dp, DeskColors.Border, shape)
+            .onGloballyPositioned { panelLeft = it.boundsInWindow().left }
+            .pointerInput(Unit) { detectTapGestures(onLongPress = { onPanelSecondaryClick(panelLeft + it.x) }) }
+            // After the long-press detector, so it sees right-clicks before that takes them.
+            .onSecondaryClickAt { onPanelSecondaryClick(panelLeft + it.x) }
             .padding(horizontal = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
@@ -127,39 +168,160 @@ fun Taskbar(
                 painterResource(R.drawable.ic_lumideck_glyph),
                 contentDescription = "LumiDeck menu",
                 tint = LumiColors.Mist,
-                modifier = Modifier.size(24.dp),
+                modifier = Modifier.size(size.icon * 6 / 7),
             )
         }
-        items.forEach { item ->
+        drag.arrange(items).forEach { item ->
             key(item.key) {
                 var centerX by remember { mutableFloatStateOf(0f) }
+                val interaction = remember { MutableInteractionSource() }
+                val hovered by interaction.collectIsHoveredAsState()
+                DisposableEffect(item.key) {
+                    onDispose {
+                        if (tooltips.hovered == item.key) {
+                            tooltips.dismiss()
+                            tooltips.hovered = null
+                        }
+                    }
+                }
+                LaunchedEffect(hovered) {
+                    if (hovered) tooltips.hovered = item.key else if (tooltips.hovered == item.key) tooltips.hovered = null
+                }
                 TaskbarButton(
-                    onClick = { onClick(item) },
+                    onClick = {
+                        tooltips.dismiss()
+                        onClick(item)
+                    },
+                    interaction = interaction,
                     active = item.focused,
                     running = item.windows.isNotEmpty(),
                     dimmed = item.minimized,
-                    onSecondaryClick = { onSecondaryClick(item, centerX) },
-                    modifier = Modifier.onGloballyPositioned { centerX = it.boundsInWindow().center.x },
+                    onSecondaryClick = {
+                        tooltips.dismiss()
+                        onSecondaryClick(item, centerX)
+                    },
+                    modifier = Modifier
+                        .onGloballyPositioned { centerX = it.boundsInWindow().center.x }
+                        .onSizeChanged { drag.slot = it.width.toFloat() }
+                        .then(if (item.pinned) Modifier.dragToReorder(item.key, drag, tooltips, { currentItems }, { currentOnReorder(it) }) else Modifier)
+                        .then(if (drag.key == item.key) Modifier.zIndex(1f).graphicsLayer { translationX = drag.offset } else Modifier),
                 ) {
-                    AppIcon(item)
+                    AppIcon(item, size)
+                    if (tooltips.shown == item.key && !menuOpen && drag.key == null) {
+                        val detail = when {
+                            item.minimized -> "Minimised"
+                            item.windows.size > 1 -> "${item.windows.size} windows"
+                            else -> null
+                        }
+                        // The button's padding plus the gap menus keep, less the tooltip's shadow margin.
+                        Tooltip(item.label, detail, gap = 3.dp + LumiDimens.MenuGap - TooltipShadowMargin)
+                    }
                 }
             }
         }
         Spacer(Modifier.weight(1f))
         BatteryIndicator()
         Spacer(Modifier.width(16.dp))
-        Clock()
+        Clock(clock)
         Spacer(Modifier.width(10.dp))
     }
 }
 
+/** The panel's corners while it floats. */
+private val PanelCorner = 8.dp
+
+/** How long the taskbar takes to slide between floating and attached. */
+const val PanelAnimationMs = 150
+
+private fun Modifier.dragToReorder(
+    key: String,
+    drag: PinDrag,
+    tooltips: TooltipState,
+    items: () -> List<TaskbarItem>,
+    onReorder: (List<String>) -> Unit,
+) = pointerInput(key) {
+    detectHorizontalDragGestures(
+        onDragStart = {
+            tooltips.dismiss()
+            drag.start(key, items())
+        },
+        onDragEnd = { drag.end()?.let(onReorder) },
+        onDragCancel = { drag.end() },
+    ) { change, amount ->
+        change.consume()
+        drag.move(amount)
+    }
+}
+
+/**
+ * A pinned app being dragged along the taskbar. It swaps places with a neighbour once it's
+ * dragged halfway over it, so the others make room as it goes.
+ */
+@Stable
+private class PinDrag {
+    var key by mutableStateOf<String?>(null)
+        private set
+
+    /** The pins in their new order, and as they were when the drag started. */
+    private var order by mutableStateOf(emptyList<String>())
+    private var initialOrder = emptyList<String>()
+
+    /** How far the dragged button is from its place in [order], in pixels. */
+    var offset by mutableFloatStateOf(0f)
+        private set
+
+    /** The width a button takes in the panel, gaps included. */
+    var slot = 0f
+
+    fun start(key: String, items: List<TaskbarItem>) {
+        this.key = key
+        order = items.filter { it.pinned }.map { it.key }
+        initialOrder = order
+        offset = 0f
+    }
+
+    fun move(amount: Float) {
+        val key = key ?: return
+        var i = order.indexOf(key)
+        if (i < 0 || slot <= 0f) return
+        var offset = offset + amount
+        while (offset > slot / 2 && i < order.lastIndex) {
+            order = order.swapped(i, ++i)
+            offset -= slot
+        }
+        while (offset < -slot / 2 && i > 0) {
+            order = order.swapped(i, --i)
+            offset += slot
+        }
+        // Not past either end of the pins.
+        this.offset = offset.coerceIn(if (i == 0) 0f else -slot, if (i == order.lastIndex) 0f else slot)
+    }
+
+    /** Ends the drag, returning the new order if the pins moved. */
+    fun end(): List<String>? {
+        val moved = key != null && order != initialOrder
+        key = null
+        offset = 0f
+        return if (moved) order else null
+    }
+
+    /** [items] with the pins in their dragged order. */
+    fun arrange(items: List<TaskbarItem>): List<TaskbarItem> {
+        if (key == null) return items
+        val byKey = items.associateBy { it.key }
+        return order.mapNotNull { byKey[it] } + items.filter { it.key !in order }
+    }
+
+    private fun List<String>.swapped(a: Int, b: Int) = toMutableList().also { it[a] = this[b]; it[b] = this[a] }
+}
+
 @Composable
-private fun AppIcon(item: TaskbarItem) {
-    val size = Modifier.size(LumiDimens.TaskbarIcon)
+private fun AppIcon(item: TaskbarItem, size: TaskbarSize) {
+    val iconSize = Modifier.size(size.icon)
     if (item.icon != null) {
-        Image(item.icon, contentDescription = item.label, modifier = size)
+        Image(item.icon, contentDescription = item.label, modifier = iconSize)
     } else {
-        Box(size.clip(ItemShape).background(LumiColors.Teal), contentAlignment = Alignment.Center) {
+        Box(iconSize.clip(ItemShape).background(LumiColors.Teal), contentAlignment = Alignment.Center) {
             Text(item.label.take(1).uppercase(), color = LumiColors.Text, fontSize = 15.sp, fontWeight = FontWeight.Medium)
         }
     }
@@ -174,13 +336,13 @@ private fun AppIcon(item: TaskbarItem) {
 private fun TaskbarButton(
     onClick: () -> Unit,
     modifier: Modifier = Modifier,
+    interaction: MutableInteractionSource = remember { MutableInteractionSource() },
     active: Boolean = false,
     running: Boolean = false,
     dimmed: Boolean = false,
     onSecondaryClick: (() -> Unit)? = null,
     content: @Composable () -> Unit,
 ) {
-    val interaction = remember { MutableInteractionSource() }
     val hovered by interaction.collectIsHoveredAsState()
     val pressed by interaction.collectIsPressedAsState()
     val background = when {

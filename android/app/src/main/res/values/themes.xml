@@ -13,7 +13,16 @@
         <item name="android:windowBackground">@color/lumideck_desktop</item>
     </style>
 
+    <!-- Light, like the desktop's panels (DeskColors in ui/Theme.kt). -->
+    <style name="Theme.LumiDeck.Settings" parent="android:Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/lumideck_settings</item>
+        <item name="android:colorPrimary">@color/lumideck_settings</item>
+        <item name="android:colorAccent">@color/lumideck_accent</item>
+    </style>
+
     <color name="lumideck_base">#FF101519</color>
     <!-- The wallpaper's base colour, shown for the moment before the desktop draws. -->
     <color name="lumideck_desktop">#FFCFE0EC</color>
+    <color name="lumideck_settings">#FFE6EDF3</color>
+    <color name="lumideck_accent">#FF3A87B8</color>
 </resources>

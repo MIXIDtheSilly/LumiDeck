@@ -55,10 +55,12 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 ### Using the desktop
 
 - **Logo button** or **Meta (Windows key)**: open or close the app menu. Type to search, press **Enter** to open the first result, **Esc** to close.
-- **Right-click or long-press** an app in the menu to pin it to the taskbar.
+- **Right-click or long-press** an app in the menu to pin it to the taskbar. Drag pinned apps along the taskbar to reorder them. Hover over any of them to see its name.
 - Open apps appear in the taskbar after the pinned ones, with a line under them. Click one to bring it to the front, or to minimise it if it's already there. Right-click or long-press it to maximise, minimise, pin or close it.
 - The taskbar stays above app windows, even maximised ones. This needs Android's "Display over other apps" permission, which the setup script and the PC client grant; without it the taskbar sits behind apps.
 - Open apps in the taskbar need the **window helper**, a small program the PC client starts over ADB (Android doesn't let apps manage other apps' windows). It keeps running after you unplug, until the device reboots. To use a monitor after a reboot, plug into the PC once and run `scripts\setup-device.ps1 -SkipInstall`. Without the helper, the taskbar shows only pinned apps.
+- The taskbar floats, and attaches to the bottom edge while a window reaches down to it, as on Plasma.
+- **Desktop Settings**, in the app menu or the taskbar's right-click menu, sets the wallpaper (a colour or your own picture), the taskbar's size, whether it floats, the clock format and the order of pinned apps.
 - In the PC window, scrcpy's own shortcuts use **Right Ctrl** (for example, Right Ctrl+F toggles fullscreen).
 
 ## Repo layout
@@ -73,7 +75,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 ## Roadmap
 
 - [x] **Phase 0:** desktop app with floating taskbar, app menu, pinned apps, battery and clock; Windows client using scrcpy
-- [ ] **Phase 1:** ~~taskbar as an always-on-top overlay~~ (done), app tooltips, settings
+- [x] **Phase 1:** always-on-top taskbar, app tooltips, reordering pins, settings, floating or attached taskbar, home-app check
 - [ ] **Phase 2:** polished Windows client: tray icon, auto-connect, clipboard and file drag-and-drop
 - [ ] **Phase 3:** window management: ~~running apps in the taskbar with focus, minimise, maximise and close~~ (done, via ADB), Shizuku so it works on a monitor without a PC, Alt+Tab, snapping
 - [ ] **Phase 4:** native Rust client, Wi-Fi mode
@@ -85,7 +87,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 - Android's Settings app hides the taskbar while it's open, because it hides everything apps draw over other apps.
 - Some apps don't resize well in windows.
 - Device makers can change how desktop mode behaves. On Samsung phones, DeX takes over external monitors.
-- **Anbernic RG556:** video out tops out at 1080p, and the device can't charge while it's driving a monitor. That's why the battery level always shows in the taskbar. Its firmware can also forget LumiDeck as the home app after a reboot. The PC client re-applies it each time, but on a monitor you may need to run `scripts\setup-device.ps1 -SkipInstall` again.
+- **Anbernic RG556:** video out tops out at 1080p, and the device can't charge while it's driving a monitor. That's why the battery level always shows in the taskbar. Its firmware can also forget LumiDeck as the home app after a reboot. The PC client re-applies it each time. On a monitor, LumiDeck warns you on the handheld screen (allow its notifications), and you can fix it there by picking another launcher and then LumiDeck again in the home app settings.
 
 ## Credits
 

@@ -14,6 +14,7 @@ import android.os.Parcel
 import android.os.Process
 import android.util.Log
 import android.view.Display
+import app.lumideck.SettingsActivity
 import kotlin.system.exitProcess
 
 private const val LUMIDECK = "app.lumideck"
@@ -88,6 +89,9 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
             Log.w(TAG, "Couldn't list windows", e)
             return
         }
+        // Android doesn't report windows being moved, resized or maximised from their title
+        // bar, so check again shortly while any are showing.
+        if (windows.any { it.visible } && !handler.hasCallbacks(refresh)) handler.postDelayed(refresh, POLL_MS)
         if (windows == sent) return
         try {
             listener.onWindowsChanged(windows)
@@ -174,6 +178,7 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
 
     companion object {
         private const val TAG = "LumiDeckHelper"
+        private const val POLL_MS = 250L
 
         @JvmStatic
         fun main(args: Array<String>) {
@@ -258,7 +263,8 @@ private class Tasks {
         // Leaves out home screens (LumiDeck's own desktop among them), recents and the assistant.
         if (window.javaClass.getMethod("getActivityType").invoke(window) != ACTIVITY_TYPE_STANDARD) return null
         val component = baseIntent.component ?: baseActivity ?: return null
-        if (component.packageName == LUMIDECK) return null
+        // LumiDeck's setup screen isn't a window on the desktop, but its settings are.
+        if (component.packageName == LUMIDECK && component.className != SettingsActivity::class.java.name) return null
         return TaskWindow(
             taskId = taskId,
             displayId = hidden("displayId") ?: Display.DEFAULT_DISPLAY,
