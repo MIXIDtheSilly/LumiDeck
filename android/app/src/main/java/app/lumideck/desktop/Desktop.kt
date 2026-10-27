@@ -2,6 +2,7 @@ package app.lumideck.desktop
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -135,8 +136,9 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
 
         AnimatedVisibility(
             visibleState = menuState,
-            enter = fadeIn() + slideInVertically { it / 12 },
-            exit = fadeOut() + slideOutVertically { it / 12 },
+            // Quick, like Plasma's popups: the default springs take about 400ms to settle.
+            enter = fadeIn(tween(MenuAnimationMs)) + slideInVertically(tween(MenuAnimationMs)) { it / 12 },
+            exit = fadeOut(tween(MenuAnimationMs)) + slideOutVertically(tween(MenuAnimationMs)) { it / 12 },
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(start = LumiDimens.TaskbarMargin, bottom = AboveTaskbar),
@@ -166,6 +168,8 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
         }
     }
 }
+
+private const val MenuAnimationMs = 110
 
 /** Menus open this far above the bottom of the screen, clear of the taskbar. */
 private val AboveTaskbar = LumiDimens.TaskbarMargin * 2 + LumiDimens.TaskbarHeight + LumiDimens.MenuGap

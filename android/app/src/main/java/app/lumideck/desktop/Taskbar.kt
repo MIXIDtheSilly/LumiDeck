@@ -10,6 +10,7 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxHeight
@@ -165,7 +166,7 @@ private fun AppIcon(item: TaskbarItem) {
 }
 
 /**
- * A full-height panel button, highlighted while [active]. A running app gets a line along
+ * A square, full-height panel button, highlighted while [active]. A running app gets a line along
  * the bottom: long while it's in front, faded while it's minimised.
  */
 @OptIn(ExperimentalFoundationApi::class)
@@ -190,9 +191,9 @@ private fun TaskbarButton(
     }
     Box(
         modifier
-            .padding(vertical = 3.dp)
+            .padding(3.dp)
             .fillMaxHeight()
-            .width(LumiDimens.TaskbarButtonWidth)
+            .aspectRatio(1f)
             .clip(ItemShape)
             .background(background)
             .hoverable(interaction)

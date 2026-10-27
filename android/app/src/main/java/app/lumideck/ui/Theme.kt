@@ -44,7 +44,6 @@ object LumiDimens {
     val TaskbarHeight = 44.dp
     /** Gap between the floating taskbar and the screen edges. */
     val TaskbarMargin = 8.dp
-    val TaskbarButtonWidth = 48.dp
     val TaskbarIcon = 28.dp
     val MenuGap = 6.dp
 }
