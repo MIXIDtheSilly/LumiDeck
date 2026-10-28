@@ -2,9 +2,12 @@ package app.lumideck.desktop
 
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.MutableTransitionState
+import androidx.compose.animation.core.spring
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
+import androidx.compose.animation.scaleIn
+import androidx.compose.animation.scaleOut
 import androidx.compose.animation.slideInVertically
 import androidx.compose.animation.slideOutVertically
 import android.graphics.BitmapFactory
@@ -32,6 +35,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
+import androidx.compose.ui.graphics.TransformOrigin
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
@@ -227,9 +231,12 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
 
         AnimatedVisibility(
             visibleState = menuState,
-            // Quick, like Plasma's popups: the default springs take about 400ms to settle.
-            enter = fadeIn(tween(MenuAnimationMs)) + slideInVertically(tween(MenuAnimationMs)) { it / 12 },
-            exit = fadeOut(tween(MenuAnimationMs)) + slideOutVertically(tween(MenuAnimationMs)) { it / 12 },
+            // Grows out of the logo's corner on a stiff spring, which settles in about 250ms
+            // with a slight overshoot; the default springs take about 400ms.
+            enter = fadeIn(tween(MenuAnimationMs)) +
+                scaleIn(spring(dampingRatio = 0.8f, stiffness = 1200f), initialScale = 0.9f, transformOrigin = TransformOrigin(0f, 1f)),
+            exit = fadeOut(tween(MenuAnimationMs)) +
+                scaleOut(tween(MenuAnimationMs), targetScale = 0.95f, transformOrigin = TransformOrigin(0f, 1f)),
             modifier = Modifier
                 .align(Alignment.BottomStart)
                 .padding(start = LumiDimens.TaskbarMargin, bottom = aboveTaskbar),

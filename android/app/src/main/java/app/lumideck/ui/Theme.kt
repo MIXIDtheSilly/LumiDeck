@@ -39,6 +39,12 @@ object DeskColors {
     val TextDim = Color(0xFF5A6B78)
     val Warning = Color(0xFFD2503F)
     val WarningPressed = Color(0xFFB03F31)
+
+    /** The app menu, Material 3 style: tonal surfaces from the accent, no borders. */
+    val Sheet = Color(0xFFEDF3F8)
+    val SearchField = Color(0xFFDAE6EF)
+    val AccentContainer = Color(0xFFCCE3F3)
+    val OnAccentContainer = Color(0xFF0F3A55)
 }
 
 /** The taskbar's height and icon size are settings: see [app.lumideck.data.TaskbarSize]. */
@@ -51,6 +57,10 @@ object LumiDimens {
 /** Plasma's floating panel and popups: rounded rectangles with small corners. */
 val PanelShape = RoundedCornerShape(8.dp)
 val ItemShape = RoundedCornerShape(4.dp)
+
+/** The app menu's Material 3 shapes: an extra-large sheet and rounded tiles. */
+val SheetShape = RoundedCornerShape(28.dp)
+val TileShape = RoundedCornerShape(20.dp)
 
 @Composable
 fun LumiTheme(content: @Composable () -> Unit) {

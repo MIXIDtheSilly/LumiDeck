@@ -111,6 +111,25 @@ fun SunIcon(color: Color, size: Dp = 18.dp) = Icon(size) {
     }
 }
 
+/** A magnifying glass, for search. */
+@Composable
+fun SearchIcon(color: Color, size: Dp = 18.dp) = Icon(size) {
+    val w = this.size.width
+    val stroke = w * 0.1f
+    val centre = Offset(w * 0.42f, w * 0.42f)
+    drawCircle(color, radius = w * 0.26f, center = centre, style = Stroke(stroke))
+    drawLine(color, Offset(w * 0.62f, w * 0.62f), Offset(w * 0.86f, w * 0.86f), stroke, StrokeCap.Round)
+}
+
+/** A cross, for clearing or closing. */
+@Composable
+fun CloseIcon(color: Color, size: Dp = 18.dp) = Icon(size) {
+    val w = this.size.width
+    val stroke = w * 0.1f
+    drawLine(color, Offset(w * 0.25f, w * 0.25f), Offset(w * 0.75f, w * 0.75f), stroke, StrokeCap.Round)
+    drawLine(color, Offset(w * 0.75f, w * 0.25f), Offset(w * 0.25f, w * 0.75f), stroke, StrokeCap.Round)
+}
+
 /** A diagonal line across the icon, for "off". */
 private fun DrawScope.slash(color: Color) {
     drawLine(color, Offset(size.width * 0.18f, size.height * 0.14f), Offset(size.width * 0.82f, size.height * 0.86f), size.width * 0.09f, StrokeCap.Round)
