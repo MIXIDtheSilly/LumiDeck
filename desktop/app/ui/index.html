@@ -1,0 +1,296 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LumiDeck</title>
+<style>
+  /* Android 16's Material 3 Expressive, in the LumiDeck logo's blues (android/.../ui/Theme.kt). */
+  :root {
+    --bg: #EDF3F8;
+    --surface: #F9FBFD;
+    --surface-hover: #F0F5F9;
+    --surface-pressed: #E4EDF4;
+    --primary: #3A87B8;
+    --primary-container: #CCE3F3;
+    --on-primary-container: #0F3A55;
+    --text: #1C2830;
+    --dim: #5A6B78;
+    --outline: #7D8E9A;
+    --outline-variant: #C5D3DE;
+    --night: #101519;
+    --slate: #2B3A42;
+    --teal: #465D6B;
+    --mist: #82ADC8;
+    --light: #EAF2F3;
+    --warning: #FFB4A9;
+    --emphasized: cubic-bezier(.2, 0, 0, 1);
+    --spring: cubic-bezier(.34, 1.45, .64, 1);
+    --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    color: var(--text);
+    background: var(--bg);
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    display: flex; flex-direction: column;
+    background: var(--bg);
+    user-select: none;
+    -webkit-user-select: none;
+    cursor: default;
+  }
+  button { font: inherit; color: inherit; border: none; background: none; padding: 0; cursor: pointer; }
+  button:disabled { cursor: default; }
+  svg.icon { width: 24px; height: 24px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* Title bar: drags the window, double-click maximises */
+  .titlebar { height: 44px; flex: none; display: flex; align-items: center; }
+  .titlebar > :not(.captions) { pointer-events: none; }
+  .logo {
+    width: 24px; height: 24px; border-radius: 7px; flex: none; padding: 5px; margin: 0 10px 0 18px;
+    background: linear-gradient(135deg, var(--night), var(--teal) 55%, var(--mist));
+  }
+  .logo svg { width: 100%; height: 100%; display: block; }
+  .name { font-size: 13px; font-weight: 600; letter-spacing: .1px; transition: color 150ms; }
+  body.inactive .name, body.inactive .caption { color: var(--outline); }
+  .captions { margin-left: auto; display: flex; align-self: stretch; }
+  .caption { position: relative; width: 48px; display: grid; place-items: center; color: var(--text); }
+  .caption::before {
+    content: ""; position: absolute; inset: 6px 5px; border-radius: 16px;
+    transition: background-color 120ms, border-radius 220ms var(--emphasized);
+  }
+  .caption:hover::before { background: rgba(16, 21, 25, .07); }
+  .caption:active::before { background: rgba(16, 21, 25, .12); border-radius: 9px; }
+  .caption.close:hover { color: #FFFFFF; }
+  .caption.close:hover::before { background: #C42B1C; }
+  .caption.close:active::before { background: #B12A1D; }
+  .caption svg { position: relative; width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.1; }
+  .restore, body.maximized .maximize { display: none; }
+  body.maximized .restore { display: block; }
+
+  /* The page below the title bar scrolls when the window is small */
+  .page { flex: 1; min-height: 0; overflow-y: auto; padding: 0 16px 12px; }
+  .page::-webkit-scrollbar { width: 12px; }
+  .page::-webkit-scrollbar-thumb { background: var(--outline-variant); border: 3px solid var(--bg); border-radius: 6px; }
+  .page::-webkit-scrollbar-thumb:hover { background: var(--outline); }
+  .inner { max-width: 1240px; margin: 0 auto; }
+
+  /* The device: a banner on the logo's gradient */
+  .hero {
+    position: relative; overflow: hidden; border-radius: 28px; padding: 18px 18px 18px 20px;
+    display: flex; align-items: center; gap: 18px; color: var(--light);
+    background: linear-gradient(110deg, var(--night) 0%, var(--slate) 30%, var(--teal) 68%, var(--mist) 135%);
+  }
+  .hero .mark { position: absolute; right: -40px; top: -70px; width: 240px; height: 240px; opacity: .07; pointer-events: none; }
+  .badge {
+    width: 56px; height: 56px; border-radius: 18px; flex: none; display: grid; place-items: center;
+    background: rgba(234, 242, 243, .12); position: relative;
+  }
+  .badge svg.icon { width: 28px; height: 28px; stroke-width: 1.6; }
+  .about { flex: 1; min-width: 0; position: relative; }
+  .heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
+  .device { font: 600 24px/1.2 var(--display); letter-spacing: -.2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .status {
+    display: inline-flex; align-items: center; gap: 7px; height: 26px; padding: 0 12px 0 10px; border-radius: 13px; flex: none;
+    background: rgba(234, 242, 243, .12); font-size: 12.5px; font-weight: 600; letter-spacing: .2px;
+  }
+  .status .dot { width: 8px; height: 8px; border-radius: 50%; background: #8FE3B0; animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(143, 227, 176, .18); } }
+  .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-top: 5px; font-size: 13.5px; color: rgba(234, 242, 243, .72); }
+  .battery { display: inline-flex; align-items: center; gap: 6px; color: var(--light); }
+  .battery svg { width: 22px; height: 13px; }
+  .error {
+    margin-top: 10px; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4;
+    background: rgba(255, 180, 169, .14); color: var(--warning);
+  }
+  .actions { display: flex; gap: 8px; flex: none; position: relative; }
+
+  /* Buttons squeeze their corners while pressed, as Expressive does */
+  .btn {
+    height: 48px; padding: 0 24px; border-radius: 24px; font-size: 15px; font-weight: 600;
+    display: inline-flex; align-items: center; justify-content: center; gap: 10px;
+    transition: border-radius 220ms var(--emphasized), background-color 150ms, opacity 150ms;
+  }
+  .btn:active:not(:disabled) { border-radius: 12px; }
+  .btn:disabled { opacity: .4; }
+  .btn.light { background: var(--light); color: var(--night); min-width: 150px; }
+  .btn.light:hover:not(:disabled) { background: #FFFFFF; }
+  .btn.ghost { color: var(--light); box-shadow: inset 0 0 0 1.5px rgba(234, 242, 243, .45); }
+  .btn.ghost:hover { background: rgba(234, 242, 243, .1); }
+  .btn.tonal { height: 40px; padding: 0 20px; border-radius: 20px; font-size: 14px; background: var(--primary-container); color: var(--on-primary-container); }
+  .btn.tonal:active:not(:disabled) { border-radius: 10px; }
+  .btn.tonal:hover:not(:disabled) { background: #BCD9EE; }
+
+  /* Settings: two columns when there's room */
+  .sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); column-gap: 16px; align-items: start; }
+  h2 { font-size: 14px; font-weight: 600; color: var(--primary); margin: 20px 20px 8px; letter-spacing: .2px; }
+  .note { font-size: 13px; color: var(--dim); margin: -4px 20px 10px; }
+
+  /* Grouped lists: rounded at the group's ends, nearly square between items */
+  .group { display: flex; flex-direction: column; gap: 2px; }
+  .item {
+    display: flex; align-items: center; gap: 16px; min-height: 68px; padding: 12px 16px 12px 14px;
+    background: var(--surface); border-radius: 6px; text-align: left; width: 100%;
+    transition: background-color 150ms;
+  }
+  .item:first-child { border-top-left-radius: 26px; border-top-right-radius: 26px; }
+  .item:last-child { border-bottom-left-radius: 26px; border-bottom-right-radius: 26px; }
+  button.item:hover:not(:disabled) { background: var(--surface-hover); }
+  button.item:active:not(:disabled) { background: var(--surface-pressed); }
+  .lead {
+    width: 40px; height: 40px; border-radius: 50%; flex: none; display: grid; place-items: center;
+    background: var(--primary-container); color: var(--on-primary-container);
+  }
+  .lead svg.icon { width: 22px; height: 22px; }
+  .lead .aa { font-size: 15px; font-weight: 700; letter-spacing: -.5px; }
+  .text { flex: 1; min-width: 0; }
+  .title { font-size: 16px; font-weight: 500; }
+  .sub { font-size: 13.5px; color: var(--dim); margin-top: 2px; line-height: 1.35; }
+
+  /* Material 3 switch */
+  .switch {
+    position: relative; width: 52px; height: 32px; flex: none; border-radius: 16px;
+    background: #E1E9EF; box-shadow: inset 0 0 0 2px var(--outline);
+    transition: background-color 200ms, box-shadow 200ms;
+  }
+  .switch::after {
+    content: ""; position: absolute; left: 8px; top: 8px; width: 16px; height: 16px; border-radius: 50%;
+    background: var(--outline) center / 16px no-repeat;
+    transition: all 260ms var(--spring);
+  }
+  .switch.on { background: var(--primary); box-shadow: inset 0 0 0 2px var(--primary); }
+  .switch.on::after {
+    left: 24px; top: 4px; width: 24px; height: 24px; background-color: #FFFFFF;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M6 12.5l4 4 8-9' fill='none' stroke='%233A87B8' stroke-width='2.4' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E");
+  }
+  button.item:active .switch::after { width: 28px; height: 28px; left: 2px; top: 2px; }
+  button.item:active .switch.on::after { left: 22px; }
+
+  /* Drop-down values */
+  .select {
+    display: inline-flex; align-items: center; gap: 6px; height: 40px; padding: 0 12px 0 16px; border-radius: 20px;
+    background: var(--bg); font-size: 14px; font-weight: 600; color: var(--on-primary-container); flex: none;
+    transition: background-color 150ms, border-radius 220ms var(--emphasized);
+  }
+  .select:hover { background: #E2ECF3; }
+  .select.open { border-radius: 12px; background: var(--primary-container); }
+  .select svg.icon { width: 18px; height: 18px; transition: transform 220ms var(--emphasized); }
+  .select.open svg.icon { transform: rotate(180deg); }
+  .menu {
+    position: fixed; z-index: 10; min-width: 200px; padding: 6px; border-radius: 20px; background: var(--surface);
+    box-shadow: 0 6px 24px rgba(16, 21, 25, .16), 0 1px 3px rgba(16, 21, 25, .12);
+    transform-origin: top right; transform: scale(.92); opacity: 0; pointer-events: none;
+    transition: transform 240ms var(--spring), opacity 120ms;
+  }
+  .menu.shown { transform: none; opacity: 1; pointer-events: auto; }
+  .option {
+    display: flex; align-items: center; gap: 12px; width: 100%; height: 44px; padding: 0 14px; border-radius: 12px;
+    font-size: 14px; text-align: left;
+  }
+  .option:hover { background: var(--surface-hover); }
+  .option.chosen { background: var(--primary-container); color: var(--on-primary-container); font-weight: 600; }
+  .option .extra { margin-left: auto; font-size: 12px; color: var(--dim); font-weight: 400; }
+  .option svg.icon { width: 18px; height: 18px; visibility: hidden; }
+  .option.chosen svg.icon { visibility: visible; }
+
+  .chip {
+    display: inline-flex; align-items: center; gap: 6px; height: 32px; padding: 0 14px 0 10px; border-radius: 16px;
+    background: var(--primary-container); color: var(--on-primary-container); font-size: 13px; font-weight: 600; flex: none;
+  }
+  .chip svg.icon { width: 18px; height: 18px; }
+  footer { font-size: 12.5px; color: var(--dim); margin: 18px 20px 4px; }
+</style>
+</head>
+<body>
+<div class="titlebar" data-tauri-drag-region>
+  <div class="logo"><svg viewBox="0 0 750 750"><path fill="#EAF2F3" d="M0,78 A78,78 0 0 1 78,0 H272 A78,78 0 0 1 350,78 V320 A80,80 0 0 0 430,400 H672 A78,78 0 0 1 750,478 V672 A78,78 0 0 1 672,750 H78 A78,78 0 0 1 0,672 Z M400,78 A78,78 0 0 1 478,0 H672 A78,78 0 0 1 750,78 V272 A78,78 0 0 1 672,350 H438 A38,38 0 0 1 400,312 Z"/></svg></div>
+  <div class="name">LumiDeck</div>
+  <div class="captions">
+    <button id="minimize" class="caption" title="Minimise"><svg viewBox="0 0 10 10"><path d="M0 5.5h10"/></svg></button>
+    <button id="maximize" class="caption" title="Maximise">
+      <svg class="maximize" viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" rx="1.5"/></svg>
+      <svg class="restore" viewBox="0 0 10 10"><rect x=".5" y="2.5" width="7" height="7" rx="1.5"/><path d="M2.5 2.5V2A1.5 1.5 0 0 1 4 .5h4A1.5 1.5 0 0 1 9.5 2v4A1.5 1.5 0 0 1 8 7.5h-.5"/></svg>
+    </button>
+    <button id="close-window" class="caption close" title="Close"><svg viewBox="0 0 10 10"><path d="M.5 .5l9 9M9.5 .5l-9 9"/></svg></button>
+  </div>
+</div>
+
+<div class="page"><div class="inner">
+  <section id="hero" class="hero">
+    <svg class="mark" viewBox="0 0 750 750"><path fill="#EAF2F3" d="M0,78 A78,78 0 0 1 78,0 H272 A78,78 0 0 1 350,78 V320 A80,80 0 0 0 430,400 H672 A78,78 0 0 1 750,478 V672 A78,78 0 0 1 672,750 H78 A78,78 0 0 1 0,672 Z M400,78 A78,78 0 0 1 478,0 H672 A78,78 0 0 1 750,78 V272 A78,78 0 0 1 672,350 H438 A38,38 0 0 1 400,312 Z"/></svg>
+    <div class="badge"><svg class="icon" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="3"/><path d="M6.5 12h3M8 10.5v3"/><circle cx="16" cy="11" r=".9"/><circle cx="17.5" cy="13.5" r=".9"/></svg></div>
+    <div class="about">
+      <div class="heading">
+        <div id="device" class="device">Plug in your device</div>
+        <div id="status" class="status" hidden><span class="dot"></span>Desktop open</div>
+      </div>
+      <div id="meta" class="meta"></div>
+      <div id="error" class="error" hidden></div>
+    </div>
+    <div class="actions">
+      <button id="close" class="btn ghost" hidden>Close</button>
+      <button id="open" class="btn light" disabled>Open desktop</button>
+    </div>
+  </section>
+
+  <div class="sections">
+    <div>
+      <h2>Display</h2>
+      <p id="later" class="note" hidden>Changes apply the next time the desktop opens.</p>
+      <div class="group">
+        <div class="item">
+          <div class="lead"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
+          <div class="text"><div class="title">Resolution</div><div class="sub">The desktop's size in pixels</div></div>
+          <button class="select" data-menu="resolution"><span></span><svg class="icon" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
+        </div>
+        <div class="item">
+          <div class="lead"><span class="aa">Aa</span></div>
+          <div class="text"><div class="title">Scale</div><div class="sub">How big text and icons are</div></div>
+          <button class="select" data-menu="dpi"><span></span><svg class="icon" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
+        </div>
+        <button class="item" data-toggle="fullscreen">
+          <div class="lead"><svg class="icon" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></div>
+          <div class="text"><div class="title">Start fullscreen</div><div class="sub">Right Ctrl+F switches while it's open</div></div>
+          <div class="switch"></div>
+        </button>
+      </div>
+      <h2>Sound</h2>
+      <div class="group">
+        <button class="item" data-toggle="audio">
+          <div class="lead"><svg class="icon" viewBox="0 0 24 24"><path d="M4 9.5h3.5L12 6v12l-4.5-3.5H4z"/><path d="M15.5 9.5a3.5 3.5 0 0 1 0 5M18 7a7 7 0 0 1 0 10"/></svg></div>
+          <div class="text"><div class="title">Play sound on this PC</div><div class="sub">Otherwise it stays on the device</div></div>
+          <div class="switch"></div>
+        </button>
+      </div>
+    </div>
+    <section>
+      <h2>Connection</h2>
+      <div class="group">
+        <button class="item" data-toggle="autoConnect">
+          <div class="lead"><svg class="icon" viewBox="0 0 24 24"><path d="M9 3v4M15 3v4M6.5 7h11v3.5a5.5 5.5 0 0 1-11 0zM12 16v5"/></svg></div>
+          <div class="text"><div class="title">Open when plugged in</div><div class="sub">As soon as the device is connected</div></div>
+          <div class="switch"></div>
+        </button>
+        <button class="item" data-toggle="startWithWindows">
+          <div class="lead"><svg class="icon" viewBox="0 0 24 24"><rect x="4" y="4" width="7" height="7" rx="1"/><rect x="13" y="4" width="7" height="7" rx="1"/><rect x="4" y="13" width="7" height="7" rx="1"/><rect x="13" y="13" width="7" height="7" rx="1"/></svg></div>
+          <div class="text"><div class="title">Start with Windows</div><div class="sub">Keeps LumiDeck ready in the tray</div></div>
+          <div class="switch"></div>
+        </button>
+        <div class="item">
+          <div class="lead"><svg class="icon" viewBox="0 0 24 24"><path d="M12 3v14M9.5 5.5L12 3l2.5 2.5M12 13.5l-4-2.5V9M12 11.5l4-2V7.5"/><circle cx="8" cy="8" r="1.2"/><rect x="15" y="5.5" width="2" height="2"/><circle cx="12" cy="19" r="2"/></svg></div>
+          <div class="text"><div class="title">Direct USB link</div><div id="usb-sub" class="sub">Faster than ADB. Windows asks for an administrator once.</div></div>
+          <span id="usb-ready" class="chip" hidden><svg class="icon" viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg>Ready</span>
+          <button id="usb-setup" class="btn tonal">Set up</button>
+        </div>
+      </div>
+    </section>
+  </div>
+  <footer id="footer"></footer>
+</div></div>
+
+<div id="menu" class="menu"></div>
+
+<script src="home.js"></script>
+</body>
+</html>

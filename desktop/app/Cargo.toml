@@ -1,0 +1,30 @@
+[package]
+name = "lumideck-tray"
+version = "0.1.0"
+edition = "2024"
+description = "LumiDeck for PCs: the window with the device and its settings, and the tray icon"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+nusb = "0.1"
+serde_json = "1"
+tauri = { version = "=2.12.4", features = ["tray-icon"] }
+tauri-plugin-single-instance = "=2.5.4"
+
+[dependencies.windows]
+version = "0.62"
+features = [
+    "Win32_Foundation",
+    "Win32_Security",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_UI_Shell",
+    "Win32_UI_WindowsAndMessaging",
+]
+
+[build-dependencies]
+tauri-build = { version = "=2.7.3", features = [] }
+
+[profile.release]
+debug = 1

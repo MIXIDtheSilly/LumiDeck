@@ -13,8 +13,9 @@
     once (as an administrator: Windows asks). Until then, and with -Link adb, it goes
     through ADB.
 
-    -Tray keeps LumiDeck in the Windows tray instead, opening the desktop whenever the
-    device is plugged in (its menu can start it with Windows).
+    -Tray opens LumiDeck's window instead, with the device and the settings, and keeps
+    LumiDeck in the Windows tray: it can open the desktop whenever the device is plugged
+    in, and start with Windows. Options given here override the window's settings.
 
     -Scrcpy uses scrcpy instead, as LumiDeck did before it had its own client.
 
@@ -38,7 +39,7 @@ param(
     [switch]$SetupUsb,
     # Print how fast the video goes.
     [switch]$Stats,
-    # Stay in the tray and open the desktop whenever the device is plugged in.
+    # Open LumiDeck's window, and stay in the tray.
     [switch]$Tray,
     [switch]$Scrcpy,
     # Turn the device's own screen off while the desktop is open (scrcpy only, for now).
@@ -74,7 +75,25 @@ if (-not $Scrcpy) {
     if ($NoAudio) { $clientArgs += '--no-audio' }
     if ($Stats) { $clientArgs += '--stats' }
     if ($Tray) {
-        Start-Process (Join-Path $client 'target\release\lumideck-tray.exe') -ArgumentList $clientArgs
+        # Only what was asked for here: the window has its own settings.
+        $trayArgs = @()
+        if ($PSBoundParameters.ContainsKey('Resolution')) { $trayArgs += '--resolution', $Resolution }
+        if ($PSBoundParameters.ContainsKey('Dpi')) { $trayArgs += '--dpi', $Dpi }
+        if ($PSBoundParameters.ContainsKey('Link')) { $trayArgs += '--link', $Link }
+        if ($Fullscreen) { $trayArgs += '--fullscreen' }
+        if ($NoAudio) { $trayArgs += '--no-audio' }
+        if ($Stats) { $trayArgs += '--stats' }
+        $trayExe = Join-Path $client 'target\release\lumideck-tray.exe'
+        # The app (desktop\app, Tauri) builds next to the client: its .cargo\config.toml says
+        # so, which cargo only reads from inside its folder. A running one just shows its window.
+        if ((Get-Command cargo -ErrorAction SilentlyContinue) -and -not (Get-Process lumideck-tray -ErrorAction SilentlyContinue)) {
+            Push-Location (Join-Path $PSScriptRoot 'app')
+            try { cargo build --release --quiet } finally { Pop-Location }
+            if ($LASTEXITCODE -ne 0) { throw 'The app failed to build.' }
+        } elseif (-not (Test-Path $trayExe)) {
+            throw 'Building the app needs Rust. Install it with: winget install --id Rustlang.Rustup -e'
+        }
+        if ($trayArgs) { Start-Process $trayExe -ArgumentList $trayArgs } else { Start-Process $trayExe }
         exit 0
     }
     & $exe @clientArgs

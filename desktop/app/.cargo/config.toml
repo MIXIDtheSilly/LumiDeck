@@ -1,0 +1,3 @@
+# Builds next to the client, so lumideck-tray.exe finds lumideck.exe beside it.
+[build]
+target-dir = "../client/target"
