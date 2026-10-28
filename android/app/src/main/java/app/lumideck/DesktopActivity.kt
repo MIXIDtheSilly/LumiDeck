@@ -19,10 +19,14 @@ import app.lumideck.desktop.DesktopScreen
 import app.lumideck.desktop.DesktopState
 import app.lumideck.desktop.MenuLayer
 import app.lumideck.desktop.MetaTap
+import app.lumideck.desktop.Shortcuts
+import app.lumideck.desktop.Snap
+import app.lumideck.desktop.SwitcherState
 import app.lumideck.desktop.TaskbarLayer
 import app.lumideck.desktop.TaskbarOverlay
 import app.lumideck.desktop.WindowDecor
 import app.lumideck.desktop.Windows
+import app.lumideck.helper.HelperLink
 import app.lumideck.ui.LumiTheme
 
 /** The desktop shown on an external monitor or on the virtual display streamed to a PC. */
@@ -34,6 +38,8 @@ class DesktopActivity : ComponentActivity() {
     private val overlayShown = mutableStateOf(false)
     private val metaTap = MetaTap(::onMetaTap)
     private var lastMetaTap = 0L
+    private val onShortcut: (String) -> Unit = ::onShortcut
+    private var shortcutDisplay = -1
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Android gives every desktop-mode display its own navigation bar. The desktop hides
@@ -46,6 +52,8 @@ class DesktopActivity : ComponentActivity() {
         super.onCreate(savedInstanceState)
 
         overlay.onTaskbarResize = decor::layout
+        shortcutDisplay = windows.displayId
+        Shortcuts.register(shortcutDisplay, onShortcut)
 
         // Back never leaves the desktop; it only closes the menus.
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
@@ -78,6 +86,7 @@ class DesktopActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
+        Shortcuts.unregister(shortcutDisplay, onShortcut)
         decor.stop()
         overlay.hide()
         super.onDestroy()
@@ -93,11 +102,34 @@ class DesktopActivity : ComponentActivity() {
     @SuppressLint("RestrictedApi")
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         // Esc closes the menus, as it does in the overlay (see TaskbarOverlay).
-        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE && (state.menuOpen || state.taskMenu != null)) {
+        if (event.keyCode == KeyEvent.KEYCODE_ESCAPE && state.anyMenuOpen) {
             if (event.action == KeyEvent.ACTION_UP) state.closeMenus()
             return true
         }
         return metaTap.onKey(event) || super.dispatchKeyEvent(event)
+    }
+
+    /** A shortcut from the PC's keyboard (see [Shortcuts]). */
+    private fun onShortcut(name: String) {
+        val open = HelperLink.windows.value.orEmpty().filter { it.displayId == windows.displayId }
+        val front = open.firstOrNull { it.focused && it.visible }
+        when (name) {
+            "switch_next", "switch_previous" -> {
+                val forward = name == "switch_next"
+                val next = state.switcher?.step(forward) ?: SwitcherState.start(open, forward)
+                state.closeMenus()
+                state.switcher = next
+            }
+            "switch_commit" -> {
+                state.switcher?.let { windows.focus(it.picked) }
+                state.switcher = null
+            }
+            "switch_cancel" -> state.switcher = null
+            "snap_left" -> front?.let { windows.snap(it, Snap.Left) }
+            "snap_right" -> front?.let { windows.snap(it, Snap.Right) }
+            "maximize" -> front?.let(windows::maximize)
+            "restore" -> front?.let { if (windows.isArranged(it)) windows.restore(it) else windows.minimize(it) }
+        }
     }
 
     /**

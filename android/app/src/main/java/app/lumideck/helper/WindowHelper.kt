@@ -1,21 +1,18 @@
 package app.lumideck.helper
 
 import android.app.ActivityManager
-import android.content.AttributionSource
-import android.content.pm.ProviderInfo
 import android.graphics.Rect
 import android.os.Binder
-import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
 import android.os.Parcel
-import android.os.Process
 import android.os.SystemClock
 import android.util.Log
 import android.view.Display
 import app.lumideck.SettingsActivity
+import kotlin.concurrent.thread
 import kotlin.system.exitProcess
 
 private const val LUMIDECK = "app.lumideck"
@@ -48,6 +45,10 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
 
     override fun close(taskId: Int) = command { tasks.remove(taskId) }
 
+    override fun setWifi(on: Boolean) = shell("cmd", "wifi", "set-wifi-enabled", if (on) "enabled" else "disabled")
+
+    override fun setBluetooth(on: Boolean) = shell("svc", "bluetooth", if (on) "enable" else "disable")
+
     override fun exit() {
         checkCaller()
         Log.i(TAG, "A newer helper took over")
@@ -63,6 +64,20 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
         }
         // Not every change (resizing, for one) makes Android report it.
         handler.post { scheduleRefresh() }
+    }
+
+    /** Runs a shell command, off the binder thread: calls to the helper wait their turn. */
+    private fun shell(vararg command: String) {
+        checkCaller()
+        thread(isDaemon = true) {
+            try {
+                val process = ProcessBuilder(*command).redirectErrorStream(true).start()
+                val output = process.inputStream.bufferedReader().readText()
+                if (process.waitFor() != 0) Log.w(TAG, "${command.joinToString(" ")} failed: $output")
+            } catch (e: Exception) {
+                Log.w(TAG, "${command.joinToString(" ")} failed", e)
+            }
+        }
     }
 
     private fun checkCaller() {
@@ -117,10 +132,11 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
      */
     private fun attach(): Boolean {
         val reply = try {
-            callLumiDeck(Bundle().apply {
+            val extras = Bundle().apply {
                 putBinder(HelperProvider.KEY_HELPER, this@WindowHelper)
                 putInt(HelperProvider.KEY_VERSION, IWindowHelper.VERSION)
-            })
+            }
+            callLumiDeck(HelperProvider.METHOD_ATTACH, null, extras) { appUid = it.applicationInfo.uid }
         } catch (e: Exception) {
             Log.w(TAG, "Couldn't reach LumiDeck", e)
             return false
@@ -150,39 +166,6 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
         } else {
             Log.i(TAG, "LumiDeck is gone")
             exitProcess(0)
-        }
-    }
-
-    /** Calls [HelperProvider], the way the `content call` command does. */
-    private fun callLumiDeck(extras: Bundle): Bundle? {
-        val am = Class.forName("android.app.ActivityManager").getMethod("getService").invoke(null)!!
-        val token = Binder()
-        val holder = am.javaClass
-            .getMethod("getContentProviderExternal", String::class.java, Int::class.javaPrimitiveType, IBinder::class.java, String::class.java)
-            .invoke(am, HelperProvider.AUTHORITY, 0, token, TAG) ?: return null
-        try {
-            val info = holder.javaClass.getField("info").get(holder) as ProviderInfo
-            if (info.packageName != LUMIDECK) return null
-            appUid = info.applicationInfo.uid
-            val provider = holder.javaClass.getField("provider").get(holder)!!
-            // Its parameters changed in Android 11 and again in 12.
-            val call = provider.javaClass.methods.filter { it.name == "call" }.maxBy { it.parameterCount }
-            val args = listOf(HelperProvider.AUTHORITY, HelperProvider.METHOD_ATTACH, null, extras)
-            return when {
-                call.parameterCount == 6 -> call.invoke(provider, SHELL_PACKAGE, null, *args.toTypedArray())
-                call.parameterTypes[0] == String::class.java -> call.invoke(provider, SHELL_PACKAGE, *args.toTypedArray())
-                Build.VERSION.SDK_INT >= Build.VERSION_CODES.S -> call.invoke(
-                    provider,
-                    AttributionSource.Builder(Process.myUid()).setPackageName(SHELL_PACKAGE).build(),
-                    *args.toTypedArray(),
-                )
-                else -> null
-            } as Bundle?
-        } finally {
-            runCatching {
-                am.javaClass.getMethod("removeContentProviderExternal", String::class.java, IBinder::class.java)
-                    .invoke(am, HelperProvider.AUTHORITY, token)
-            }
         }
     }
 

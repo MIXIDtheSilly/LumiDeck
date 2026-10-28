@@ -45,6 +45,12 @@ class Windows(private val activity: Activity) {
 
     fun openSettings() = launchOwn(ComponentName(activity, SettingsActivity::class.java))
 
+    /** Opens one of Android's settings screens, such as [android.provider.Settings.ACTION_SETTINGS], as a window. */
+    fun openSystemSettings(action: String) {
+        // Not every firmware has every screen.
+        runCatching { activity.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launchOptions()) }
+    }
+
     private fun launchOwn(component: ComponentName) =
         activity.startActivity(Intent().setComponent(component).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launchOptions())
 
@@ -58,6 +64,8 @@ class Windows(private val activity: Activity) {
         if (window.focused && window.visible) HelperLink.minimize(window.taskId) else HelperLink.focus(window.taskId)
     }
 
+    fun focus(window: TaskWindow) = HelperLink.focus(window.taskId)
+
     fun minimize(window: TaskWindow) = HelperLink.minimize(window.taskId)
 
     fun close(window: TaskWindow) = HelperLink.close(window.taskId)
@@ -67,26 +75,57 @@ class Windows(private val activity: Activity) {
 
     fun isMaximized(window: TaskWindow) = window.bounds == maximizedArea()
 
+    /** Whether [window] fills the screen or half of it, and goes back to its own size when it's moved or restored. */
+    fun isArranged(window: TaskWindow) = isMaximized(window) || Snap.entries.any { window.bounds == snapArea(it) }
+
     /** Maximised means filling the screen above the taskbar, which stays in view. */
-    fun toggleMaximized(window: TaskWindow) {
-        val bounds = if (isMaximized(window)) {
-            unmaximized(window)
-        } else {
-            restoreBounds[window.taskId] = window.bounds
-            maximizedArea()
-        }
-        HelperLink.resize(window.taskId, bounds)
+    fun toggleMaximized(window: TaskWindow) = if (isMaximized(window)) restore(window) else maximize(window)
+
+    fun maximize(window: TaskWindow) = arrange(window, maximizedArea())
+
+    /** Fills [side]'s half of the screen with [window]. */
+    fun snap(window: TaskWindow, side: Snap) = arrange(window, snapArea(side))
+
+    /** Puts an arranged [window] back to its own size and place. */
+    fun restore(window: TaskWindow) {
+        if (!isArranged(window)) return
+        HelperLink.resize(window.taskId, unmaximized(window))
         HelperLink.focus(window.taskId)
     }
 
-    /** Where maximised [window] goes back to, which it's then no longer expected to. */
+    /** Where an arranged [window] goes back to, which it's then no longer expected to. */
     fun unmaximized(window: TaskWindow): Rect = restoreBounds.remove(window.taskId) ?: nextBounds()
+
+    /**
+     * Moves the window [taskId] to [bounds], filling the screen or half of it, and remembers
+     * [restore] for when it's restored.
+     */
+    fun place(taskId: Int, bounds: Rect, restore: Rect) {
+        restoreBounds[taskId] = restore
+        HelperLink.resize(taskId, bounds)
+        HelperLink.focus(taskId)
+    }
+
+    private fun arrange(window: TaskWindow, bounds: Rect) {
+        // Windows that fill the screen whatever their bounds say can't be arranged.
+        if (!window.freeform) return
+        place(window.taskId, bounds, if (isArranged(window)) restoreBounds[window.taskId] ?: nextBounds() else window.bounds)
+    }
+
+    /** [side]'s half of the screen, which reaches down to the taskbar as a maximised window does. */
+    fun snapArea(side: Snap): Rect {
+        val area = maximizedArea()
+        return when (side) {
+            Snap.Left -> Rect(area.left, area.top, area.centerX(), area.bottom)
+            Snap.Right -> Rect(area.centerX(), area.top, area.right, area.bottom)
+        }
+    }
 
     /** Whether [window] reaches down to where the floating taskbar sits, so the taskbar attaches to the edge. */
     fun reachesPanel(window: TaskWindow) = window.visible && window.bounds.bottom > areaAbove(attached = false).bottom
 
     /** Maximised windows reach down to the taskbar, which attaches to the edge for them unless it always floats. */
-    private fun maximizedArea() = areaAbove(attached = prefs.panelFloat != PanelFloat.Always)
+    fun maximizedArea() = areaAbove(attached = prefs.panelFloat != PanelFloat.Always)
 
     /**
      * The screen above the taskbar, [attached] to the edge or floating. Windows stay inside
@@ -119,3 +158,6 @@ class Windows(private val activity: Activity) {
         }
     }
 }
+
+/** Which half of the screen a window snaps to. */
+enum class Snap { Left, Right }

@@ -96,8 +96,23 @@ object StreamServer {
         runCatching(screen::hideIme).onFailure { System.err.println("Couldn't hide the keyboard UI: $it") }
         if (options.stayAwake) stayAwake()
 
-        val stream = VideoStream(screen, options.width, options.height, options, link.video)
-        val controls = Controls(link.controls, screen.id, keyboard, stream::requestKeyFrame)
+        val video = link.video.shared()
+        val clipboard = try {
+            ClipboardSync { text ->
+                val data = text.toByteArray(Charsets.UTF_8)
+                video.write(ByteBuffer.allocate(12).putLong(VideoStream.CLIPBOARD).putInt(data.size).flip() as ByteBuffer, ByteBuffer.wrap(data))
+            }
+        } catch (e: Exception) {
+            System.err.println("No clipboard: $e")
+            null
+        }
+        val stream = VideoStream(screen, options.width, options.height, options, video, onStarted = {
+            runCatching { clipboard?.start() }.onFailure { System.err.println("No clipboard: $it") }
+        })
+        val onClipboard: (String) -> Unit = { text ->
+            runCatching { clipboard?.setText(text) }.onFailure { System.err.println("Couldn't set the clipboard: $it") }
+        }
+        val controls = Controls(link.controls, screen.id, keyboard, stream::requestKeyFrame, onClipboard)
         thread(name = "controls", isDaemon = true) {
             try {
                 controls.run()
@@ -194,4 +209,4 @@ object StreamServer {
 }
 
 /** Bumped whenever the client and the server stop understanding each other. */
-internal const val PROTOCOL_VERSION = 2
+internal const val PROTOCOL_VERSION = 3

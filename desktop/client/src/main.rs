@@ -7,6 +7,7 @@
 
 mod adb;
 mod audio;
+mod clipboard;
 mod decoder;
 mod keyboard;
 mod protocol;
@@ -204,7 +205,14 @@ fn run() -> Result<()> {
     server.on_stop(move |why| {
         let _ = stopped.send(video::Event::Closed(std::io::Error::other(why)));
     });
-    video::spawn_reader(video, video_events.clone());
+    let clipboard = clipboard::spawn(controls.clone())
+        .inspect_err(|e| eprintln!("No clipboard: {e:#}"))
+        .ok();
+    video::spawn_reader(video, video_events.clone(), move |text| {
+        if let Some(clipboard) = &clipboard {
+            clipboard.set(text);
+        }
+    });
     if let Some(sound) = sound {
         audio::spawn(sound);
     }

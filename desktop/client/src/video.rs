@@ -13,7 +13,7 @@ use anyhow::{Result, bail};
 use windows::Win32::Foundation::HWND;
 
 use crate::decoder::{Decoder, Frame};
-use crate::protocol::{CODEC_H264, CODEC_HEVC, Control, FLAG_CONFIG, FLAG_COPY, FLAG_KEY_FRAME};
+use crate::protocol::{CLIPBOARD, CODEC_H264, CODEC_HEVC, Control, FLAG_CONFIG, FLAG_COPY, FLAG_KEY_FRAME};
 use crate::render::Renderer;
 
 pub struct Header {
@@ -61,7 +61,13 @@ impl WindowSize {
     }
 }
 
-pub fn spawn_reader(mut stream: impl Read + Send + 'static, events: Sender<Event>) {
+/// Reads the video off `stream` into `events`, and passes the device's clipboard text,
+/// which comes with it, to `on_clipboard`.
+pub fn spawn_reader(
+    mut stream: impl Read + Send + 'static,
+    events: Sender<Event>,
+    on_clipboard: impl Fn(String) + Send + 'static,
+) {
     thread::Builder::new()
         .name("video in".into())
         .spawn(move || {
@@ -75,6 +81,10 @@ pub fn spawn_reader(mut stream: impl Read + Send + 'static, events: Sender<Event
                 let mut data = vec![0u8; size];
                 if let Err(e) = stream.read_exact(&mut data) {
                     break e;
+                }
+                if flags == CLIPBOARD {
+                    on_clipboard(String::from_utf8_lossy(&data).into_owned());
+                    continue;
                 }
                 if events.send(Event::Packet { flags, data }).is_err() {
                     return;

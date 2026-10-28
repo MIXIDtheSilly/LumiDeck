@@ -13,12 +13,16 @@
     once (as an administrator: Windows asks). Until then, and with -Link adb, it goes
     through ADB.
 
+    -Tray keeps LumiDeck in the Windows tray instead, opening the desktop whenever the
+    device is plugged in (its menu can start it with Windows).
+
     -Scrcpy uses scrcpy instead, as LumiDeck did before it had its own client.
 
 .EXAMPLE
     .\desktop\lumideck.ps1
     .\desktop\lumideck.ps1 -Resolution 2560x1440 -Dpi 200 -Fullscreen
     .\desktop\lumideck.ps1 -SetupUsb
+    .\desktop\lumideck.ps1 -Tray
 #>
 param(
     [string]$Serial,
@@ -34,6 +38,8 @@ param(
     [switch]$SetupUsb,
     # Print how fast the video goes.
     [switch]$Stats,
+    # Stay in the tray and open the desktop whenever the device is plugged in.
+    [switch]$Tray,
     [switch]$Scrcpy,
     # Turn the device's own screen off while the desktop is open (scrcpy only, for now).
     [switch]$ScreenOff
@@ -67,6 +73,10 @@ if (-not $Scrcpy) {
     if ($Fullscreen) { $clientArgs += '--fullscreen' }
     if ($NoAudio) { $clientArgs += '--no-audio' }
     if ($Stats) { $clientArgs += '--stats' }
+    if ($Tray) {
+        Start-Process (Join-Path $client 'target\release\lumideck-tray.exe') -ArgumentList $clientArgs
+        exit 0
+    }
     & $exe @clientArgs
     exit $LASTEXITCODE
 }
@@ -82,9 +92,8 @@ if ($homeRole -and $homeRole.Context.PostContext -match "holders=$LumiPackage") 
     adb -s $serial shell cmd role add-role-holder android.app.role.HOME $LumiPackage | Out-Null
 }
 
-# Lets the taskbar stay above app windows ("Display over other apps"). Also set by
-# setup-device.ps1; repeated here for installs made before the taskbar needed it.
-adb -s $serial shell appops set $LumiPackage SYSTEM_ALERT_WINDOW allow | Out-Null
+# Also done by setup-device.ps1; repeated here for installs made before they were needed.
+Grant-LumiPermissions $serial
 
 # Running apps in the taskbar.
 Start-WindowHelper $serial

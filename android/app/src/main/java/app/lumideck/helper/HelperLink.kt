@@ -47,6 +47,12 @@ object HelperLink {
     fun resize(taskId: Int, bounds: Rect) = call { it.resize(taskId, bounds) }
     fun close(taskId: Int) = call { it.close(taskId) }
 
+    /** Whether a helper runs, so Wi-Fi and Bluetooth can be switched. */
+    val running get() = helper != null
+
+    fun setWifi(on: Boolean) = call { it.setWifi(on) }
+    fun setBluetooth(on: Boolean) = call { it.setBluetooth(on) }
+
     private inline fun call(target: IWindowHelper? = helper, action: (IWindowHelper) -> Unit) {
         try {
             target?.let(action)

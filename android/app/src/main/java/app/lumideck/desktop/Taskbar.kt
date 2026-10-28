@@ -118,8 +118,8 @@ fun panelFootprint(size: TaskbarSize, attached: Boolean): Dp =
     if (attached) size.height else size.height + LumiDimens.TaskbarMargin * 2
 
 /**
- * The panel, Plasma-style: logo on the left, then pinned and running apps, tray and clock
- * on the right. It floats clear of the screen edges, and slides onto the bottom edge while
+ * The panel, Plasma-style: logo on the left, then pinned and running apps, the tray
+ * ([SystemTray]) and clock on the right. It floats clear of the screen edges, and slides onto the bottom edge while
  * [attached]. Pinned apps can be dragged into a new order, which goes to [onReorder].
  * [onSecondaryClick] gets the button's centre, and [onPanelSecondaryClick] the pointer's
  * position, in pixels from the left of the window.
@@ -131,7 +131,9 @@ fun Taskbar(
     clock: ClockFormat,
     attached: Boolean,
     menuOpen: Boolean,
+    quickSettingsOpen: Boolean,
     onLogoClick: () -> Unit,
+    onTrayClick: () -> Unit,
     onClick: (TaskbarItem) -> Unit,
     onSecondaryClick: (TaskbarItem, centerX: Float) -> Unit,
     onPanelSecondaryClick: (x: Float) -> Unit,
@@ -220,8 +222,8 @@ fun Taskbar(
             }
         }
         Spacer(Modifier.weight(1f))
-        BatteryIndicator()
-        Spacer(Modifier.width(16.dp))
+        SystemTray(open = quickSettingsOpen, onClick = onTrayClick)
+        Spacer(Modifier.width(8.dp))
         Clock(clock)
         Spacer(Modifier.width(10.dp))
     }

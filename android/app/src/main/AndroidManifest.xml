@@ -8,6 +8,17 @@
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
 
+    <!--
+        Quick settings (desktop/QuickSettings.kt). Brightness ("Modify system settings"),
+        Do not disturb and Bluetooth's state need the PC client to grant them.
+    -->
+    <uses-permission android:name="android.permission.ACCESS_WIFI_STATE" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
+    <uses-permission android:name="android.permission.WRITE_SETTINGS" />
+    <uses-permission android:name="android.permission.ACCESS_NOTIFICATION_POLICY" />
+    <uses-permission android:name="android.permission.BLUETOOTH" android:maxSdkVersion="30" />
+    <uses-permission android:name="android.permission.BLUETOOTH_CONNECT" />
+
     <!-- Needed to list and launch every app from the app menu. -->
     <queries>
         <intent>

@@ -22,6 +22,12 @@ internal fun interface Sink {
     }
 }
 
+/** This sink, for more than one thread at once. */
+internal fun Sink.shared(): Sink {
+    val lock = Any()
+    return Sink { buffers -> synchronized(lock) { write(*buffers) } }
+}
+
 /**
  * The connection to the PC straight over USB, without ADB in between: Android's accessory
  * mode (AOA), which the PC switches the device to (see desktop/client/src/usb.rs).

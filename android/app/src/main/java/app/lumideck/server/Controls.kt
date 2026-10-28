@@ -19,8 +19,10 @@ internal class Controls(
     private val displayId: Int,
     private val keyboard: HidKeyboard?,
     private val onKeyFrameRequest: () -> Unit,
+    private val onClipboard: (String) -> Unit,
 ) {
     private val injector = Injector()
+    private val keys = keyboard?.let { DesktopKeys(displayId, it) }
     /** Android's mouse buttons that are down. */
     private var buttons = 0
     private var downTime = 0L
@@ -42,9 +44,13 @@ internal class Controls(
                     MOUSE_SCROLL -> scroll(data.readInt(), data.readInt(), data.readFloat(), data.readFloat())
                     MOUSE_LEAVE -> if (buttons == 0) mouse(MotionEvent.ACTION_HOVER_EXIT)
                     KEY -> key(data.readUnsignedByte(), data.readBoolean())
-                    RELEASE_KEYS -> keyboard?.releaseAll()
+                    RELEASE_KEYS -> keys?.releaseAll()
                     KEY_FRAME -> onKeyFrameRequest()
                     PING -> {}
+                    CLIPBOARD -> {
+                        val text = ByteArray(data.readInt()).also(data::readFully)
+                        onClipboard(String(text, Charsets.UTF_8))
+                    }
                     else -> throw IllegalStateException("Unknown control message $type")
                 }
             }
@@ -98,7 +104,7 @@ internal class Controls(
     }
 
     private fun key(usage: Int, down: Boolean) {
-        keyboard?.key(usage, down)
+        keys?.key(usage, down)
     }
 
     private fun mouse(action: Int, actionButton: Int = 0, horizontal: Float = 0f, vertical: Float = 0f) {
@@ -145,6 +151,7 @@ internal class Controls(
         const val RELEASE_KEYS = 6
         const val KEY_FRAME = 7
         const val PING = 8
+        const val CLIPBOARD = 9
 
         const val BUTTON_PRIMARY = 1
         const val BUTTON_SECONDARY = 2

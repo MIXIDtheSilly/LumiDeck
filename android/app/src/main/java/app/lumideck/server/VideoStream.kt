@@ -105,6 +105,8 @@ internal class VideoStream(
     private val height: Int,
     private val options: Options,
     private val out: Sink,
+    /** Called once the video's header has gone out, after which others may use [out] too. */
+    private val onStarted: () -> Unit = {},
 ) {
     @Volatile private var codec: MediaCodec? = null
     /** The time stamp of the last frame the PC shows, which the encoder repeats. */
@@ -123,6 +125,7 @@ internal class VideoStream(
         val (codec, codecId) = open()
         this.codec = codec
         writeHeader(codecId)
+        onStarted()
         val surface = codec.createInputSurface()
         screen.setSurface(surface)
         codec.start()
@@ -259,6 +262,8 @@ internal class VideoStream(
         const val FLAG_CONFIG = 1L shl 63
         const val FLAG_KEY_FRAME = 1L shl 62
         const val FLAG_COPY = 1L shl 61
+        /** All three flags: not a frame but the device's clipboard text (see [ClipboardSync]). */
+        const val CLIPBOARD = FLAG_CONFIG or FLAG_KEY_FRAME or FLAG_COPY
         /**
          * Longer than a frame's time, so that the encoder only repeats a frame when the
          * screen stopped changing, not between frames.

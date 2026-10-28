@@ -60,6 +60,14 @@ class DesktopState {
     /** The open right-click menu on the taskbar. */
     var taskMenu by mutableStateOf<TaskMenuAnchor?>(null)
 
+    /** Quick settings, opened from the tray. */
+    var quickSettingsOpen by mutableStateOf(false)
+
+    /** Alt+Tab's window switcher, while Alt is held (see [Shortcuts]). */
+    var switcher by mutableStateOf<SwitcherState?>(null)
+
+    val anyMenuOpen get() = menuOpen || taskMenu != null || quickSettingsOpen || switcher != null
+
     /** The taskbar is attached to the screen edge rather than floating. */
     var panelAttached by mutableStateOf(false)
 
@@ -72,9 +80,17 @@ class DesktopState {
         menuOpen = open
     }
 
+    fun toggleQuickSettings() {
+        val open = !quickSettingsOpen
+        closeMenus()
+        quickSettingsOpen = open
+    }
+
     fun closeMenus() {
         menuOpen = false
         taskMenu = null
+        quickSettingsOpen = false
+        switcher = null
     }
 }
 
@@ -152,7 +168,9 @@ fun TaskbarLayer(state: DesktopState, windows: Windows, onHeightChange: (Dp) -> 
             clock = settings.clock,
             attached = attached,
             menuOpen = state.menuOpen,
+            quickSettingsOpen = state.quickSettingsOpen,
             onLogoClick = state::toggleMenu,
+            onTrayClick = state::toggleQuickSettings,
             onClick = { item ->
                 state.closeMenus()
                 val window = item.mainWindow
@@ -173,8 +191,8 @@ fun TaskbarLayer(state: DesktopState, windows: Windows, onHeightChange: (Dp) -> 
 }
 
 /**
- * The app menu and the taskbar buttons' right-click menus, above the taskbar, and a
- * click-outside area that closes them. [onShownChange] reports whether there is anything
+ * The app menu, quick settings, the window switcher and the taskbar buttons' right-click
+ * menus, above the taskbar, and a click-outside area that closes them. [onShownChange] reports whether there is anything
  * to show: a menu is open, or the app menu is still animating closed.
  */
 @Composable
@@ -186,10 +204,12 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
     val items = rememberTaskbarItems(apps, pinnedKeys, windows)
     val aboveTaskbar = panelFootprint(settings.taskbarSize, state.panelAttached) + LumiDimens.MenuGap
     val menuState = remember { MutableTransitionState(false) }.apply { targetState = state.menuOpen }
+    val quickState = remember { MutableTransitionState(false) }.apply { targetState = state.quickSettingsOpen }
     val anchor = state.taskMenu
     val taskItem = anchor?.key?.let { key -> items.firstOrNull { it.key == key } }
     val panelMenu = anchor != null && anchor.key == null
-    val shown = menuState.currentState || menuState.targetState || taskItem != null || panelMenu
+    val shown = menuState.currentState || menuState.targetState || quickState.currentState || quickState.targetState ||
+        taskItem != null || panelMenu || state.switcher != null
     SideEffect { onShownChange(shown) }
     // The app closed or was unpinned while its menu was open.
     LaunchedEffect(anchor, taskItem == null) {
@@ -197,7 +217,7 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
     }
 
     BottomLayer {
-        if (state.menuOpen || taskItem != null || panelMenu) {
+        if (state.anyMenuOpen) {
             Box(
                 Modifier
                     .fillMaxSize()
@@ -223,6 +243,29 @@ fun MenuLayer(state: DesktopState, windows: Windows, onShownChange: (Boolean) ->
                 },
                 onTogglePin = { prefs.togglePin(it.key) },
                 onDismiss = state::closeMenus,
+            )
+        }
+
+        AnimatedVisibility(
+            visibleState = quickState,
+            enter = fadeIn(tween(MenuAnimationMs)) + slideInVertically(tween(MenuAnimationMs)) { it / 12 },
+            exit = fadeOut(tween(MenuAnimationMs)) + slideOutVertically(tween(MenuAnimationMs)) { it / 12 },
+            modifier = Modifier
+                .align(Alignment.BottomEnd)
+                .padding(end = LumiDimens.TaskbarMargin, bottom = aboveTaskbar),
+        ) {
+            QuickSettings(windows, onDismiss = state::closeMenus)
+        }
+
+        state.switcher?.let { switcher ->
+            Switcher(
+                switcher,
+                items,
+                onPick = { window ->
+                    state.closeMenus()
+                    windows.focus(window)
+                },
+                modifier = Modifier.align(Alignment.Center),
             )
         }
 

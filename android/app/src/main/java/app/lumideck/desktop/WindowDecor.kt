@@ -5,6 +5,7 @@ import android.graphics.Paint
 import android.graphics.PixelFormat
 import android.graphics.Rect
 import android.graphics.Region
+import android.graphics.drawable.GradientDrawable
 import android.graphics.RegionIterator
 import android.os.Build
 import android.os.Handler
@@ -27,6 +28,7 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
 import androidx.compose.ui.unit.Dp
@@ -34,6 +36,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.lifecycleScope
 import app.lumideck.helper.HelperLink
 import app.lumideck.helper.TaskWindow
+import app.lumideck.ui.DeskColors
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlin.math.hypot
@@ -50,6 +53,9 @@ import kotlin.math.roundToInt
  * They're drawn in windows above every app (see [TaskbarOverlay]), so each app window's
  * title bar and edges only take up the parts no window in front of it covers, cut into
  * rectangles with a window each.
+ *
+ * A window dragged to the left or right edge of the screen snaps to that half, and to the
+ * top edge, fills the screen, with an outline showing where while it's there.
  */
 class WindowDecor(
     private val activity: ComponentActivity,
@@ -62,6 +68,7 @@ class WindowDecor(
     private fun Dp.px() = (value * density).roundToInt()
     private val handler = Handler(Looper.getMainLooper())
     private val sender = BoundsSender()
+    private val preview = SnapPreview()
     private var started = false
     private var job: Job? = null
 
@@ -87,6 +94,7 @@ class WindowDecor(
         job = null
         pool.forEach { it.remove() }
         pool.clear()
+        preview.remove()
         gesture = null
         expected = null
     }
@@ -183,8 +191,8 @@ class WindowDecor(
     /** Starts moving the window, or resizing it by [edges], from where the pointer is ([x], [y]) on screen. */
     private fun beginDrag(frame: Frame, x: Float, y: Float, edges: Int) {
         var start = Rect(frame.bounds)
-        if (edges == 0 && windows.isMaximized(frame.window)) {
-            // Dragging a maximised window restores its size, keeping it under the pointer, as on Plasma.
+        if (edges == 0 && windows.isArranged(frame.window)) {
+            // Dragging a maximised or snapped window restores its size, keeping it under the pointer, as on Plasma.
             val restored = windows.unmaximized(frame.window)
             val left = (x - (x - start.left) / start.width() * restored.width()).roundToInt()
             start = Rect(left, start.top, left + restored.width(), start.top + restored.height())
@@ -196,6 +204,10 @@ class WindowDecor(
     private fun dragTo(x: Float, y: Float) {
         val gesture = gesture ?: return
         val bounds = if (gesture.edges == 0) gesture.moved(x, y) else gesture.resized(x, y)
+        if (gesture.edges == 0) {
+            gesture.snap = snapTarget(x, y)
+            preview.show(gesture.snap)
+        }
         expected = Expected(gesture.taskId, bounds)
         layout()
         // Moving is cheap, but a resize redraws the app, so it waits between steps.
@@ -203,10 +215,32 @@ class WindowDecor(
     }
 
     private fun endDrag() {
-        if (gesture == null) return
-        gesture = null
+        val gesture = gesture ?: return
+        this.gesture = null
         sender.flush()
+        preview.show(null)
+        gesture.snap?.let { bounds ->
+            // It goes back to the size it had, where it was picked up, when it's restored.
+            windows.place(gesture.taskId, bounds, restore = gesture.start)
+            expected = Expected(gesture.taskId, bounds)
+            layout()
+        }
         settle()
+    }
+
+    /**
+     * Where a window being moved snaps to with the pointer at ([x], [y]): half the screen at
+     * its left or right edge, all of it at the top.
+     */
+    private fun snapTarget(x: Float, y: Float): Rect? {
+        val edge = SNAP_EDGE * density
+        val width = activity.window.decorView.width
+        return when {
+            y <= edge -> windows.maximizedArea()
+            x <= edge -> windows.snapArea(Snap.Left)
+            x >= width - 1 - edge -> windows.snapArea(Snap.Right)
+            else -> null
+        }
     }
 
     /** Gives the helper a moment to report what LumiDeck did before trusting its reports again. */
@@ -482,6 +516,60 @@ class WindowDecor(
         }
     }
 
+    /** An outline of where a window being dragged will snap to. */
+    private inner class SnapPreview {
+        private var view: View? = null
+        private var shown: Rect? = null
+        private val params = LayoutParams(
+            0,
+            0,
+            LayoutParams.TYPE_APPLICATION_OVERLAY,
+            LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_NOT_TOUCHABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                LayoutParams.FLAG_LAYOUT_NO_LIMITS or LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.LEFT
+            windowAnimations = 0
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            title = "LumiDeck snap outline"
+        }
+
+        /** Shows the outline around [area], or hides it if that's null. */
+        fun show(area: Rect?) {
+            if (area == shown) return
+            shown = area
+            val view = view
+            if (area == null) {
+                view?.visibility = View.GONE
+                return
+            }
+            val inset = SnapInset.px()
+            params.x = area.left + inset
+            params.y = area.top + inset
+            params.width = area.width() - 2 * inset
+            params.height = area.height() - 2 * inset
+            if (view == null) {
+                val accent = DeskColors.Accent.toArgb()
+                this.view = View(activity).apply {
+                    background = GradientDrawable().apply {
+                        setColor(accent and 0x00FFFFFF or (0x38 shl 24))
+                        setStroke(2.dp.px(), accent)
+                        cornerRadius = 8.dp.px().toFloat()
+                    }
+                }.also { overlay.addUnderMenus(it, params) }
+            } else {
+                overlay.updateWindow(view, params)
+                view.visibility = View.VISIBLE
+            }
+        }
+
+        fun remove() {
+            view?.let(overlay::removeWindow)
+            view = null
+            shown = null
+        }
+    }
+
     /** A window as its frame is drawn: where it is, perhaps ahead of Android. */
     private data class Frame(val window: TaskWindow, val bounds: Rect, val focused: Boolean)
 
@@ -490,7 +578,10 @@ class WindowDecor(
         val taskId get() = frame.window.taskId
     }
 
-    private class Gesture(val taskId: Int, val x: Float, val y: Float, val start: Rect, val edges: Int)
+    private class Gesture(val taskId: Int, val x: Float, val y: Float, val start: Rect, val edges: Int) {
+        /** Where the window snaps to if it's let go now. */
+        var snap: Rect? = null
+    }
 
     /** [taskId] is in front, at [bounds] if they're given, until the helper says so or [until]. */
     private inner class Expected(val taskId: Int, val bounds: Rect?) {
@@ -513,6 +604,9 @@ class WindowDecor(
 
         const val CORNER = 16f
         const val KEEP_VISIBLE = 64f
+        /** How close to a screen edge the pointer snaps a window being moved. */
+        const val SNAP_EDGE = 4f
+        val SnapInset = 6.dp
         const val MIN_WIDTH = 320f
         const val MIN_HEIGHT = 200f
         const val SHADOW_ALPHA = 60f

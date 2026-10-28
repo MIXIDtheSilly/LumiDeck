@@ -100,8 +100,13 @@ impl Adb {
                 break;
             }
         }
-        // Lets the taskbar and title bars stay above app windows ("Display over other apps").
-        self.shell(&format!("appops set {PACKAGE} SYSTEM_ALERT_WINDOW allow"))?;
+        // Lets the taskbar and title bars stay above app windows ("Display over other apps"),
+        // and quick settings change the brightness and Do not disturb and see Bluetooth.
+        // Also in scripts/common.ps1 (Grant-LumiPermissions).
+        self.shell(&format!(
+            "appops set {PACKAGE} SYSTEM_ALERT_WINDOW allow; appops set {PACKAGE} WRITE_SETTINGS allow; \
+             cmd notification allow_dnd {PACKAGE}; pm grant {PACKAGE} android.permission.BLUETOOTH_CONNECT 2>/dev/null; true"
+        ))?;
         // The window helper, for the taskbar's running apps and the title bars. It keeps
         // running after the PC goes; starting it again replaces the old one.
         self.shell(&format!("CLASSPATH={apk} nohup app_process / {PACKAGE}.helper.WindowHelper >/dev/null 2>&1 &"))?;

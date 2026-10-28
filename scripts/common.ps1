@@ -36,6 +36,13 @@ function Select-LumiDevice([string]$Serial) {
     return $devices[0].Serial
 }
 
+# What LumiDeck needs that only ADB can allow: staying above app windows ("Display over
+# other apps"), and for quick settings, changing the brightness and Do not disturb and
+# seeing Bluetooth. Also in desktop/client/src/adb.rs.
+function Grant-LumiPermissions([string]$Serial) {
+    adb -s $Serial shell "appops set $LumiPackage SYSTEM_ALERT_WINDOW allow; appops set $LumiPackage WRITE_SETTINGS allow; cmd notification allow_dnd $LumiPackage; pm grant $LumiPackage android.permission.BLUETOOTH_CONNECT 2>/dev/null; true" | Out-Null
+}
+
 # Starts the window helper, which lets the taskbar list, focus, minimise, maximise and close
 # app windows (android/app/src/main/java/app/lumideck/helper/WindowHelper.kt). It runs from
 # LumiDeck's APK as ADB's shell user and keeps running after the PC disconnects, until the

@@ -42,9 +42,8 @@ Invoke-Adb shell settings put global enable_freeform_support 1
 Invoke-Adb shell settings put global force_resizable_activities 1
 Invoke-Adb shell settings put global force_desktop_mode_on_external_displays 1
 
-Write-Host 'Letting the taskbar stay above app windows...'
-# "Display over other apps" in Settings.
-Invoke-Adb shell appops set $LumiPackage SYSTEM_ALERT_WINDOW allow
+Write-Host 'Letting the taskbar stay above app windows and quick settings work...'
+Grant-LumiPermissions $serial
 
 Write-Host 'Making LumiDeck the default home app...'
 # Home is a "role" since Android 10; this is what Settings > Default apps > Home app sets.

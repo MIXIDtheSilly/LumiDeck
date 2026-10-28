@@ -7,9 +7,17 @@ import android.content.IntentFilter
 import android.os.BatteryManager
 import android.text.format.DateFormat
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.hoverable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.interaction.collectIsPressedAsState
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -18,10 +26,14 @@ import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -30,10 +42,66 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
 import app.lumideck.data.ClockFormat
+import app.lumideck.data.Volume
+import app.lumideck.data.rememberVolume
+import app.lumideck.data.rememberWifiState
 import app.lumideck.ui.DeskColors
+import app.lumideck.ui.ItemShape
+import app.lumideck.ui.SpeakerIcon
+import app.lumideck.ui.WifiIcon
 import kotlinx.coroutines.delay
 import java.util.Date
 import java.util.Locale
+
+/**
+ * The tray: Wi-Fi, volume and battery, one button that opens quick settings (see
+ * [QuickSettings]), highlighted while they're [open]. The mouse wheel over it changes the
+ * volume, as over Plasma's volume icon.
+ */
+@Composable
+fun SystemTray(open: Boolean, onClick: () -> Unit, modifier: Modifier = Modifier) {
+    val context = LocalContext.current
+    val wifi by rememberWifiState()
+    val volume by rememberVolume()
+    val interaction = remember { MutableInteractionSource() }
+    val hovered by interaction.collectIsHoveredAsState()
+    val pressed by interaction.collectIsPressedAsState()
+    val background = when {
+        pressed -> DeskColors.Pressed
+        open -> DeskColors.Selected
+        hovered -> DeskColors.Hover
+        else -> Color.Transparent
+    }
+    Row(
+        modifier
+            .padding(3.dp)
+            .fillMaxHeight()
+            .clip(ItemShape)
+            .background(background)
+            .hoverable(interaction)
+            .clickable(interactionSource = interaction, indication = null, onClick = onClick)
+            .pointerInput(Unit) {
+                awaitPointerEventScope {
+                    while (true) {
+                        val event = awaitPointerEvent()
+                        if (event.type != PointerEventType.Scroll) continue
+                        // Up is negative.
+                        val delta = event.changes.sumOf { it.scrollDelta.y.toDouble() }
+                        if (delta != 0.0) Volume.step(context, up = delta < 0)
+                        event.changes.forEach { it.consume() }
+                    }
+                }
+            }
+            .padding(horizontal = 8.dp)
+            .semantics { contentDescription = "Quick settings" },
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(10.dp),
+    ) {
+        WifiIcon(wifi.enabled, wifi.connected, wifi.bars, DeskColors.Text)
+        SpeakerIcon(volume.fraction, volume.muted, DeskColors.Text)
+        BatteryIndicator()
+    }
+}
 
 @Composable
 fun Clock(format: ClockFormat, modifier: Modifier = Modifier) {
