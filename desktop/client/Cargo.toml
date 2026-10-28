@@ -9,12 +9,15 @@ publish = false
 [dependencies]
 anyhow = "1"
 cpal = "0.16"
+futures-lite = "2.6.1"
+nusb = "0.1"
 png = "0.18"
 winit = "0.30"
 
 [dependencies.windows]
 version = "0.62"
 features = [
+    "Win32_Devices_DeviceAndDriverInstallation",
     "Win32_Foundation",
     "Win32_Graphics_Direct3D",
     "Win32_Graphics_Direct3D11",
@@ -22,6 +25,7 @@ features = [
     "Win32_Graphics_Dxgi_Common",
     "Win32_Media",
     "Win32_System_LibraryLoader",
+    "Win32_System_Registry",
     "Win32_System_Threading",
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",

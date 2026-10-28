@@ -3,7 +3,6 @@
 //! are spaced out by their time stamps, a frame at most, so each one gets on screen.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender};
@@ -14,7 +13,7 @@ use anyhow::{Result, bail};
 use windows::Win32::Foundation::HWND;
 
 use crate::decoder::{Decoder, Frame};
-use crate::protocol::{CODEC_H264, CODEC_HEVC, Control, FLAG_CONFIG, FLAG_KEY_FRAME};
+use crate::protocol::{CODEC_H264, CODEC_HEVC, Control, FLAG_CONFIG, FLAG_COPY, FLAG_KEY_FRAME};
 use crate::render::Renderer;
 
 pub struct Header {
@@ -24,7 +23,7 @@ pub struct Header {
 }
 
 impl Header {
-    pub fn read(stream: &mut TcpStream) -> Result<Header> {
+    pub fn read(stream: &mut impl Read) -> Result<Header> {
         let mut bytes = [0u8; 12];
         stream.read_exact(&mut bytes)?;
         let word = |i: usize| u32::from_be_bytes(bytes[i..i + 4].try_into().unwrap());
@@ -62,7 +61,7 @@ impl WindowSize {
     }
 }
 
-pub fn spawn_reader(mut stream: TcpStream, events: Sender<Event>) {
+pub fn spawn_reader(mut stream: impl Read + Send + 'static, events: Sender<Event>) {
     thread::Builder::new()
         .name("video in".into())
         .spawn(move || {
@@ -107,14 +106,16 @@ const MAX_HOLD_GAP: Duration = Duration::from_millis(34);
 const HOLD_SLACK: Duration = Duration::from_millis(2);
 
 /// The frame time stamp in a packet's flags, in µs.
-const PTS_MASK: u64 = (1 << 62) - 1;
+const PTS_MASK: u64 = (1 << 61) - 1;
 
 /// When the frame with time stamp `pts` should go up, keeping its spacing from the one
 /// shown last (which went up at `shown.0` and had time stamp `shown.1`).
 ///
-/// The device's encoder often hands over two frames at once. Drawn on arrival, the
-/// first would be replaced before the screen ever showed it, and motion would look like
-/// 30 frames a second. Holding the second back for its share of the time shows both.
+/// Some encoders hand over frames in pairs while the screen keeps changing (the RG556's
+/// does when told to expect 60 a second, see VideoStream.kt), and the connection can bunch
+/// frames up too. Drawn on arrival, the first would be replaced before the screen ever
+/// showed it, and motion would look like 30 frames a second. Holding the second back for
+/// its share of the time shows both.
 fn due(shown: Option<(Instant, u64)>, pts: u64, now: Instant) -> Instant {
     match shown {
         Some((at, shown_pts)) if pts > shown_pts => {
@@ -193,6 +194,9 @@ pub fn run(options: Options, events: Receiver<Event>, size: Arc<WindowSize>, con
                         match decoder.receive() {
                             Ok(Some(frame)) => {
                                 got = true;
+                                if flags & FLAG_COPY != 0 {
+                                    continue;
+                                }
                                 stats.decoded(started.elapsed());
                                 // A frame still held when the next one is decoded is late
                                 // already: up it goes, and the new one waits its turn after it.

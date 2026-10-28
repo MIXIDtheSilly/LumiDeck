@@ -5,8 +5,9 @@
 //!
 //! 1. **Video and controls.** The server sends [HELLO], then the video header
 //!    (codec, width, height: three big-endian u32s), then one packet per encoded frame:
-//!    a u64 of flags ([FLAG_CONFIG], [FLAG_KEY_FRAME]) and the frame's time in µs, a u32
-//!    size, and the data. The other way, the client sends the [Control] messages.
+//!    a u64 of flags ([FLAG_CONFIG], [FLAG_KEY_FRAME], [FLAG_COPY]) and the frame's
+//!    time in µs, a u32 size, and the data. The other way, the client sends the [Control]
+//!    messages.
 //! 2. **Sound** (only when asked for). [HELLO], the sample rate and channel count (two
 //!    u32s), then chunks of 16-bit little-endian PCM, each after its u32 size.
 //!
@@ -14,12 +15,15 @@
 //! before the server listens, and then closes it: hence the hello.
 
 pub const SOCKET: &str = "localabstract:lumideck";
-pub const HELLO: &[u8; 10] = b"LumiDeck\x00\x01";
+pub const HELLO: &[u8; 10] = b"LumiDeck\x00\x02";
 
 pub const CODEC_H264: u32 = 0x6832_3634;
 pub const CODEC_HEVC: u32 = 0x6832_3635;
 pub const FLAG_CONFIG: u64 = 1 << 63;
 pub const FLAG_KEY_FRAME: u64 = 1 << 62;
+/// A repeat of the frame before it, which the device's encoder needed to let that frame
+/// out: decoded, since later frames build on it, but not shown.
+pub const FLAG_COPY: u64 = 1 << 61;
 
 /// Mouse buttons, as the server numbers them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -61,6 +65,9 @@ pub enum Control {
     ReleaseKeys,
     /// Asks for a full frame, to decode from after an error.
     KeyFrame,
+    /// Nothing: sent when there's been nothing else for a while, so the device knows the PC
+    /// is still there. Over USB nothing else would tell it.
+    Ping,
 }
 
 impl Control {
@@ -93,6 +100,7 @@ impl Control {
             }
             Control::ReleaseKeys => out.push(6),
             Control::KeyFrame => out.push(7),
+            Control::Ping => out.push(8),
         }
     }
 }

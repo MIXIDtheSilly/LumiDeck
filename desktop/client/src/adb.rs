@@ -6,6 +6,7 @@ use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -70,6 +71,19 @@ impl Adb {
         run(self.command().args(["shell", script]))
     }
 
+    /// Stops ADB's server on the PC, which lets go of the device.
+    pub fn kill_server(&self) -> Result<()> {
+        run(Command::new(&self.exe).arg("kill-server")).map(drop)
+    }
+
+    pub fn start_server(&self) -> Result<()> {
+        run(Command::new(&self.exe).arg("start-server")).map(drop)
+    }
+
+    pub fn wait_for_device(&self) -> Result<()> {
+        run(self.command().args(["wait-for-usb-device"])).map(drop)
+    }
+
     /// What lumideck.ps1 used to do before each session.
     pub fn prepare(&self) -> Result<()> {
         let apk = self.apk()?;
@@ -103,16 +117,18 @@ impl Adb {
             .ok_or_else(|| anyhow!("LumiDeck isn't installed on the device. Run scripts\\setup-device.ps1 first."))
     }
 
-    /// Starts the server with `options` and returns it with a free port forwarded to it.
-    pub fn start_server(&self, options: &[String]) -> Result<Server> {
+    /// Starts the stream server with `options`. Over ADB (not `usb`), it comes with a free
+    /// port forwarded to it.
+    pub fn start_stream_server(&self, options: &[String], usb: bool) -> Result<Server> {
         let apk = self.apk()?;
         // A server left over from a session that ended badly would hold the socket.
         // The brackets keep pkill from matching its own command line.
         self.shell("pkill -f 'app.lumideck.server.[S]treamServer'; true")?;
-        let port: u16 = run(self.command().args(["forward", "tcp:0", SOCKET]))?
-            .trim()
-            .parse()
-            .context("adb forward gave no port")?;
+        let port: u16 = if usb {
+            0
+        } else {
+            run(self.command().args(["forward", "tcp:0", SOCKET]))?.trim().parse().context("adb forward gave no port")?
+        };
         let mut child = self
             .command()
             .args(["shell", &format!("CLASSPATH={apk}"), "app_process", "/", "app.lumideck.server.StreamServer"])
@@ -124,14 +140,15 @@ impl Adb {
             .context("Couldn't start the server")?;
         echo(child.stdout.take().unwrap());
         echo(child.stderr.take().unwrap());
-        Ok(Server { adb: self.command(), port, child })
+        Ok(Server { adb: self.command(), port, child: Arc::new(Mutex::new(child)) })
     }
 }
 
 pub struct Server {
     adb: Command,
+    /// The port forwarded to it, if any.
     port: u16,
-    child: Child,
+    child: Arc<Mutex<Child>>,
 }
 
 impl Server {
@@ -139,7 +156,7 @@ impl Server {
     pub fn connect(&mut self) -> Result<TcpStream> {
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
-            if let Ok(Some(status)) = self.child.try_wait() {
+            if let Ok(Some(status)) = self.child.lock().unwrap().try_wait() {
                 bail!("The server stopped ({status})");
             }
             if let Ok(mut stream) = TcpStream::connect(("127.0.0.1", self.port)) {
@@ -159,12 +176,27 @@ impl Server {
             thread::sleep(Duration::from_millis(100));
         }
     }
+
+    /// Calls `stopped` if the server stops. Over USB nothing else tells.
+    pub fn on_stop(&self, stopped: impl FnOnce(String) + Send + 'static) {
+        let child = self.child.clone();
+        thread::spawn(move || {
+            loop {
+                if let Ok(Some(status)) = child.lock().unwrap().try_wait() {
+                    return stopped(format!("The server stopped ({status})"));
+                }
+                thread::sleep(Duration::from_millis(250));
+            }
+        });
+    }
 }
 
 impl Drop for Server {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.adb.args(["forward", "--remove", &format!("tcp:{}", self.port)]).output();
+        let _ = self.child.lock().unwrap().kill();
+        if self.port != 0 {
+            let _ = self.adb.args(["forward", "--remove", &format!("tcp:{}", self.port)]).output();
+        }
     }
 }
 

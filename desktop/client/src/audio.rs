@@ -3,7 +3,6 @@
 
 use std::collections::VecDeque;
 use std::io::Read;
-use std::net::TcpStream;
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -22,7 +21,7 @@ struct Queue {
     playing: bool,
 }
 
-pub fn spawn(stream: TcpStream) {
+pub fn spawn(stream: impl Read + Send + 'static) {
     thread::Builder::new()
         .name("sound".into())
         .spawn(move || {
@@ -33,7 +32,7 @@ pub fn spawn(stream: TcpStream) {
         .unwrap();
 }
 
-fn run(mut socket: TcpStream) -> Result<()> {
+fn run(mut socket: impl Read) -> Result<()> {
     let mut header = [0u8; 8];
     socket.read_exact(&mut header)?;
     let rate = u32::from_be_bytes(header[..4].try_into().unwrap()) as usize;

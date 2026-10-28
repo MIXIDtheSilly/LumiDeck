@@ -26,12 +26,17 @@ internal class Controls(
     private var downTime = 0L
     private var x = 0f
     private var y = 0f
+    /** When the last message came, by [SystemClock.uptimeMillis]: the PC sends one at least every second. */
+    @Volatile var heard = SystemClock.uptimeMillis()
+        private set
 
     fun run() {
         val data = DataInputStream(input.buffered())
         try {
             while (true) {
-                when (val type = data.readUnsignedByte()) {
+                val type = data.readUnsignedByte()
+                heard = SystemClock.uptimeMillis()
+                when (type) {
                     MOUSE_MOVE -> move(data.readInt(), data.readInt())
                     MOUSE_BUTTON -> button(data.readUnsignedByte(), data.readBoolean(), data.readInt(), data.readInt())
                     MOUSE_SCROLL -> scroll(data.readInt(), data.readInt(), data.readFloat(), data.readFloat())
@@ -39,6 +44,7 @@ internal class Controls(
                     KEY -> key(data.readUnsignedByte(), data.readBoolean())
                     RELEASE_KEYS -> keyboard?.releaseAll()
                     KEY_FRAME -> onKeyFrameRequest()
+                    PING -> {}
                     else -> throw IllegalStateException("Unknown control message $type")
                 }
             }
@@ -138,6 +144,7 @@ internal class Controls(
         const val KEY = 5
         const val RELEASE_KEYS = 6
         const val KEY_FRAME = 7
+        const val PING = 8
 
         const val BUTTON_PRIMARY = 1
         const val BUTTON_SECONDARY = 2

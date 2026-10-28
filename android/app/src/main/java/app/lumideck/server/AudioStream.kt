@@ -5,8 +5,6 @@ import android.media.AudioFormat
 import android.media.AudioRecord
 import android.media.MediaRecorder
 import android.os.Build
-import android.system.Os
-import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -15,7 +13,7 @@ import java.nio.ByteOrder
  * bandwidth, and it saves the device the work. Android stops playing the sound itself
  * while it's captured, and starts again afterwards.
  */
-internal class AudioStream(private val out: FileDescriptor) {
+internal class AudioStream(private val out: Sink) {
     /** Streams until the PC goes away; throws then. */
     @SuppressLint("MissingPermission") // The shell user has it.
     fun run() {
@@ -33,7 +31,7 @@ internal class AudioStream(private val out: FileDescriptor) {
         val record = builder.build()
         try {
             record.startRecording()
-            write(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putInt(SAMPLE_RATE).putInt(CHANNELS).flip() as ByteBuffer)
+            out.write(ByteBuffer.allocate(8).order(ByteOrder.BIG_ENDIAN).putInt(SAMPLE_RATE).putInt(CHANNELS).flip() as ByteBuffer)
             // Each chunk goes out after its size.
             val chunk = ByteBuffer.allocateDirect(4 + CHUNK).order(ByteOrder.BIG_ENDIAN)
             chunk.position(4)
@@ -43,15 +41,11 @@ internal class AudioStream(private val out: FileDescriptor) {
                 if (read < 0) throw IllegalStateException("Audio capture failed: $read")
                 chunk.putInt(0, read)
                 chunk.position(0).limit(4 + read)
-                write(chunk)
+                out.write(chunk)
             }
         } finally {
             record.release()
         }
-    }
-
-    private fun write(buffer: ByteBuffer) {
-        while (buffer.hasRemaining()) Os.write(out, buffer)
     }
 
     private companion object {

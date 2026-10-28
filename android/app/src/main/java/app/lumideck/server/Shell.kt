@@ -52,6 +52,21 @@ internal object Shell {
         activityThreadClass.getDeclaredField("mInitialApplication").apply { isAccessible = true }.set(activityThread, app)
     }
 
+    /**
+     * Runs [block] with the process not taken for the system server, which [init] makes it
+     * look like. Some parcels refuse what the system server would make itself, such as a
+     * [android.hardware.usb.UsbAccessory] from the USB service.
+     */
+    fun <T> notSystem(block: () -> T): T {
+        val field = activityThreadClass.getDeclaredField("mSystemThread").apply { isAccessible = true }
+        field.setBoolean(activityThread, false)
+        try {
+            return block()
+        } finally {
+            field.setBoolean(activityThread, true)
+        }
+    }
+
     /** A system service's binder interface, as `IWindowManager.Stub.asInterface` would give it. */
     fun service(name: String, type: String): Any {
         val binder = Class.forName("android.os.ServiceManager").getMethod("getService", String::class.java).invoke(null, name)

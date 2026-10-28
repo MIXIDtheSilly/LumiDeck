@@ -8,9 +8,7 @@ import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
 import android.os.Bundle
-import android.system.Os
 import android.content.Context
-import java.io.FileDescriptor
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 
@@ -88,18 +86,29 @@ internal class VirtualScreen(width: Int, height: Int, dpi: Int) {
  * Tuned for latency over size: the hardware encoder runs at real-time priority with no
  * frames held back, and HEVC comes first because this kind of hardware encodes it faster
  * (the RG556 manages about 65 frames a second at 1080p in HEVC and 45 in H.264).
- * Even so, the RG556's encoder takes about 26 ms a frame and often hands over two frames at
- * once; the PC spaces them out again (see desktop/client/src/video.rs). None of the other
- * settings tried there changes that: operating rate, low latency, bit rate mode, scene mode.
+ *
+ * The RG556's encoder has two cores, and when told to expect more than 30 frames a second
+ * at 1080p, it works on frames two at a time, one on each: the first of a pair waits until
+ * the second comes, then both come out together, ~10 ms later. So it's told 30
+ * ([Options.frameRate]): one core alone takes 7–16 ms a frame, enough for 60 a second,
+ * and each frame comes out as soon as it's done. Rate control then gives each frame twice
+ * the bits, which only makes the stream bigger. None of the encoder's other settings
+ * change the pairing: operating rate, low latency, bit rate mode, scene mode.
+ *
+ * When the screen stops changing, the encoder repeats the last frame after
+ * [REPEAT_AFTER_US], in better quality each time. With pairs, the first repeat also gets
+ * the last frame out. It goes to the PC as a copy, decoded but not shown.
  */
 internal class VideoStream(
     private val screen: VirtualScreen,
     private val width: Int,
     private val height: Int,
     private val options: Options,
-    private val out: FileDescriptor,
+    private val out: Sink,
 ) {
     @Volatile private var codec: MediaCodec? = null
+    /** The time stamp of the last frame the PC shows, which the encoder repeats. */
+    private var shownPts = -1L
     private val stats = Stats()
 
     /** Asks for a full frame next, which the PC can start decoding from. */
@@ -129,12 +138,14 @@ internal class VideoStream(
                 var ptsFlags = if (config) 0L else info.presentationTimeUs
                 if (config) ptsFlags = ptsFlags or FLAG_CONFIG
                 if (key) ptsFlags = ptsFlags or FLAG_KEY_FRAME
+                // A repeat carries the time stamp of the frame it repeats, plus the delay.
+                val copy = !config && repeating && info.presentationTimeUs == shownPts + REPEAT_AFTER_US
+                if (copy) ptsFlags = ptsFlags or FLAG_COPY else if (!config) shownPts = info.presentationTimeUs
                 header.clear()
                 header.putLong(ptsFlags).putInt(info.size).flip()
-                writeFully(header)
                 data.position(info.offset).limit(info.offset + info.size)
-                writeFully(data)
-                if (!config) stats.frame(info.presentationTimeUs, info.size)
+                out.write(header, data)
+                if (!config) stats.frame(info.presentationTimeUs, info.size, copy)
                 codec.releaseOutputBuffer(index, false)
             }
         } finally {
@@ -167,15 +178,18 @@ internal class VideoStream(
         throw IllegalStateException("No video encoder takes ${width}x$height", error)
     }
 
+    private val repeating get() = "repeat" in options.tune
+
     private fun format(mime: String) = MediaFormat.createVideoFormat(mime, width, height).apply {
         setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
         setInteger(MediaFormat.KEY_BIT_RATE, options.bitRate)
-        setInteger(MediaFormat.KEY_FRAME_RATE, 60)
+        setInteger(MediaFormat.KEY_FRAME_RATE, options.frameRate)
         // Full frames only when the PC asks (it starts with one), plus one every so often.
         setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10)
         val tune = options.tune
-        // Sends the last frame again when the screen stops changing, so its quality catches up.
-        if ("repeat" in tune) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, 100_000)
+        // Sends the last frame again when the screen stops changing: the first repeat gets it
+        // out of the encoder, the next ones let its quality catch up.
+        if (repeating) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, REPEAT_AFTER_US)
         if ("priority" in tune) setInteger(MediaFormat.KEY_PRIORITY, 0)
         if ("latency" in tune) setInteger(KEY_LATENCY, 0)
         if ("bframes" in tune) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
@@ -191,11 +205,7 @@ internal class VideoStream(
             .firstOrNull()?.name
 
     private fun writeHeader(codecId: Int) {
-        writeFully(ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN).putInt(codecId).putInt(width).putInt(height).flip() as ByteBuffer)
-    }
-
-    private fun writeFully(buffer: ByteBuffer) {
-        while (buffer.hasRemaining()) Os.write(out, buffer)
+        out.write(ByteBuffer.allocate(12).order(ByteOrder.BIG_ENDIAN).putInt(codecId).putInt(width).putInt(height).flip() as ByteBuffer)
     }
 
     /** Prints how the encoder keeps up every few seconds, for the PC client's console. */
@@ -208,7 +218,10 @@ internal class VideoStream(
         private var lastOut = 0L
         private val gaps = ArrayList<Long>()
 
-        fun frame(ptsUs: Long, size: Int) {
+        /** Copies count towards the bit rate only. */
+        fun frame(ptsUs: Long, size: Int, copy: Boolean) {
+            bytes += size
+            if (copy) return
             val now = System.nanoTime()
             // A frame's time stamp is when Android finished drawing it.
             val latency = now / 1000 - ptsUs
@@ -219,7 +232,6 @@ internal class VideoStream(
             if (lastOut != 0L) gaps += now - lastOut
             lastOut = now
             frames++
-            bytes += size
             val elapsed = now - since
             if (elapsed < STATS_NS) return
             if (options.stats) {
@@ -246,6 +258,12 @@ internal class VideoStream(
         const val CODEC_HEVC = 0x68323635 // "h265"
         const val FLAG_CONFIG = 1L shl 63
         const val FLAG_KEY_FRAME = 1L shl 62
+        const val FLAG_COPY = 1L shl 61
+        /**
+         * Longer than a frame's time, so that the encoder only repeats a frame when the
+         * screen stopped changing, not between frames.
+         */
+        private const val REPEAT_AFTER_US = 20_000L
         private const val PACKET_HEADER = 12
         private const val KEY_LATENCY = "latency"
         private const val KEY_MAX_FPS_TO_ENCODER = "max-fps-to-encoder"

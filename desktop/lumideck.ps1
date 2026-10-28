@@ -9,11 +9,16 @@
     sends it the keyboard and mouse. Closing the window moves any open apps back to the
     device's own screen.
 
+    The client goes straight over USB once this PC is set up for it, which -SetupUsb does
+    once (as an administrator: Windows asks). Until then, and with -Link adb, it goes
+    through ADB.
+
     -Scrcpy uses scrcpy instead, as LumiDeck did before it had its own client.
 
 .EXAMPLE
     .\desktop\lumideck.ps1
     .\desktop\lumideck.ps1 -Resolution 2560x1440 -Dpi 200 -Fullscreen
+    .\desktop\lumideck.ps1 -SetupUsb
 #>
 param(
     [string]$Serial,
@@ -22,6 +27,11 @@ param(
     [int]$Dpi = 160,
     [switch]$Fullscreen,
     [switch]$NoAudio,
+    # auto (USB once set up), usb or adb.
+    [ValidateSet('auto', 'usb', 'adb')]
+    [string]$Link = 'auto',
+    # Set this PC up for the USB link, once.
+    [switch]$SetupUsb,
     # Print how fast the video goes.
     [switch]$Stats,
     [switch]$Scrcpy,
@@ -42,8 +52,17 @@ if (-not $Scrcpy) {
     } elseif (-not (Test-Path $exe)) {
         throw 'Building the client needs Rust. Install it with: winget install --id Rustlang.Rustup -e'
     }
+    if ($SetupUsb) {
+        $setupArgs = @('--setup-usb')
+        if ($Serial) { $setupArgs += '--serial', $Serial }
+        # Windows only lets an administrator change drivers. The console stays open to show
+        # how it went.
+        $command = "& '$exe' $($setupArgs -join ' '); Read-Host 'Press Enter to close'"
+        $setup = Start-Process powershell -Verb RunAs -Wait -PassThru -ArgumentList '-NoProfile', '-Command', $command
+        exit $setup.ExitCode
+    }
     if ($ScreenOff) { Write-Warning '-ScreenOff needs -Scrcpy for now.' }
-    $clientArgs = @('--resolution', $Resolution, '--dpi', $Dpi)
+    $clientArgs = @('--resolution', $Resolution, '--dpi', $Dpi, '--link', $Link)
     if ($Serial) { $clientArgs += '--serial', $Serial }
     if ($Fullscreen) { $clientArgs += '--fullscreen' }
     if ($NoAudio) { $clientArgs += '--no-audio' }

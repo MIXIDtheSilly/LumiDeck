@@ -2,7 +2,8 @@
 //! sends it the mouse and keyboard.
 //!
 //! The device side is LumiDeck's stream server (android/…/server/StreamServer.kt), which
-//! this starts over ADB. See protocol.rs for what goes between them.
+//! this starts over ADB. See protocol.rs for what goes between them, through ADB or
+//! straight over USB (usb.rs).
 
 mod adb;
 mod audio;
@@ -10,14 +11,17 @@ mod decoder;
 mod keyboard;
 mod protocol;
 mod render;
+mod usb;
+mod usb_setup;
 mod video;
 
-use std::io::Write;
-use std::net::TcpStream;
+use std::hash::{BuildHasher, Hasher};
+use std::io::{Read, Write};
 use std::process::ExitCode;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver, Sender};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
 use std::thread;
+use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use winit::application::ApplicationHandler;
@@ -45,9 +49,19 @@ Usage: lumideck [options]
   --codec <hevc|h264>   Video codec (default hevc, which the device may not have)
   --bitrate <Mbit/s>    Video bit rate (default 40)
   --no-audio            Leave the sound on the device
+  --link <auto|usb|adb> Straight over USB, or through ADB (default auto: USB once it's
+                        set up)
+  --setup-usb           Set the PC up for the USB link, once (needs an administrator)
   --stats               Print how fast video goes, every few seconds
   --dump-video <file>   Save the video stream as it arrives, to look into problems
 ";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Link {
+    Auto,
+    Usb,
+    Adb,
+}
 
 struct Args {
     serial: Option<String>,
@@ -58,6 +72,8 @@ struct Args {
     codec: String,
     bitrate: u32,
     audio: bool,
+    link: Link,
+    setup_usb: bool,
     stats: bool,
     dump: Option<std::path::PathBuf>,
 }
@@ -73,6 +89,8 @@ impl Args {
             codec: "hevc".into(),
             bitrate: 40,
             audio: true,
+            link: Link::Auto,
+            setup_usb: false,
             stats: false,
             dump: None,
         };
@@ -92,6 +110,15 @@ impl Args {
                 "--codec" => args.codec = value()?,
                 "--bitrate" => args.bitrate = value()?.parse()?,
                 "--no-audio" => args.audio = false,
+                "--link" => {
+                    args.link = match value()?.as_str() {
+                        "auto" => Link::Auto,
+                        "usb" => Link::Usb,
+                        "adb" => Link::Adb,
+                        other => bail!("--link is auto, usb or adb, not {other}"),
+                    }
+                }
+                "--setup-usb" => args.setup_usb = true,
                 "--stats" => args.stats = true,
                 "--dump-video" => args.dump = Some(value()?.into()),
                 "--help" | "-h" => {
@@ -129,6 +156,9 @@ fn run() -> Result<()> {
     // Waits as short as a millisecond, for spacing out the frames (see video::due).
     unsafe { windows::Win32::Media::timeBeginPeriod(1) };
     let adb = Adb::connect(args.serial.clone())?;
+    if args.setup_usb {
+        return usb_setup::run(&adb);
+    }
     adb.prepare()?;
 
     // Android draws its own navigation bar along the bottom of the desktop and forces it
@@ -145,14 +175,35 @@ fn run() -> Result<()> {
         format!("audio={}", args.audio),
         format!("stats={}", args.stats),
     ];
-    let mut server = adb.start_server(&options)?;
-    let mut video = server.connect()?;
-    let sound = if args.audio { Some(server.connect()?) } else { None };
+    // Over USB only once the PC is set up for it, as the first time stops ADB's server for
+    // a moment (usb::switch).
+    let usb = match args.link {
+        Link::Usb => Some(start_usb(&adb, &options, args.audio)?),
+        Link::Auto if usb_setup::done() => start_usb(&adb, &options, args.audio)
+            .inspect_err(|e| eprintln!("No USB link, going through ADB: {e:#}"))
+            .ok(),
+        _ => None,
+    };
+    let (server, mut video, sound, controls_out) = match usb {
+        Some(streams) => streams,
+        None => {
+            let mut server = adb.start_stream_server(&options, false)?;
+            let video = server.connect()?;
+            let sound: Option<Box<dyn Read + Send>> =
+                if args.audio { Some(Box::new(server.connect()?)) } else { None };
+            let controls: Box<dyn Write + Send> = Box::new(video.try_clone()?);
+            (server, Box::new(video) as Box<dyn Read + Send>, sound, controls)
+        }
+    };
     let header = Header::read(&mut video)?;
 
     let (controls, control_queue) = mpsc::channel();
-    spawn_control_writer(video.try_clone()?, control_queue);
+    spawn_control_writer(controls_out, control_queue);
     let (video_events, video_queue) = mpsc::channel();
+    let stopped = video_events.clone();
+    server.on_stop(move |why| {
+        let _ = stopped.send(video::Event::Closed(std::io::Error::other(why)));
+    });
     video::spawn_reader(video, video_events.clone());
     if let Some(sound) = sound {
         audio::spawn(sound);
@@ -176,14 +227,39 @@ fn run() -> Result<()> {
     app.result
 }
 
-/// Sends the controls on their own thread, so the window never waits on the socket.
+/// The server, with its video, sound and where the controls go.
+type Streams = (adb::Server, Box<dyn Read + Send>, Option<Box<dyn Read + Send>>, Box<dyn Write + Send>);
+
+/// Starts the server straight over USB, switching the device's USB over if it isn't.
+fn start_usb(adb: &Adb, options: &[String], audio: bool) -> Result<Streams> {
+    usb::switch(adb)?;
+    // Tells this session's data from what an earlier one left in the pipe.
+    let session = format!("{:016x}", std::collections::hash_map::RandomState::new().build_hasher().finish());
+    let mut options = options.to_vec();
+    options.extend(["link=usb".to_string(), format!("session={session}")]);
+    let server = adb.start_stream_server(&options, true)?;
+    let link = usb::connect(&adb.serial, &session)?;
+    println!("Connected straight over USB");
+    let sound: Option<Box<dyn Read + Send>> = if audio { Some(Box::new(link.audio)) } else { None };
+    Ok((server, Box::new(link.video), sound, Box::new(link.controls)))
+}
+
+/// How long the controls may go quiet before a [Control::Ping].
+const PING_EVERY: Duration = Duration::from_secs(1);
+
+/// Sends the controls on their own thread, so the window never waits on the connection.
 /// Pointer moves queued behind one another go as just the last.
-fn spawn_control_writer(mut stream: TcpStream, queue: Receiver<Control>) {
+fn spawn_control_writer(mut stream: impl Write + Send + 'static, queue: Receiver<Control>) {
     thread::Builder::new()
         .name("controls".into())
         .spawn(move || {
             let mut buffer = Vec::new();
-            while let Ok(first) = queue.recv() {
+            loop {
+                let first = match queue.recv_timeout(PING_EVERY) {
+                    Ok(control) => control,
+                    Err(RecvTimeoutError::Timeout) => Control::Ping,
+                    Err(RecvTimeoutError::Disconnected) => return,
+                };
                 let batch: Vec<Control> = std::iter::once(first).chain(queue.try_iter()).collect();
                 buffer.clear();
                 for (i, control) in batch.iter().enumerate() {

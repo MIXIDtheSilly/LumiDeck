@@ -2,7 +2,9 @@ package app.lumideck.server
 
 import android.net.LocalServerSocket
 import android.net.LocalSocket
+import android.os.SystemClock
 import android.system.Os
+import java.io.InputStream
 import java.nio.ByteBuffer
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
@@ -18,9 +20,15 @@ internal class Options(args: Array<String>) {
     val codec = values["codec"] ?: "hevc"
     val bitRate = int("bitrate", 40_000_000)
     val maxFps = int("max_fps", 0)
+    /** The frame rate the encoder is told to expect, which needn't be the real one (see [VideoStream]). */
+    val frameRate = int("frame_rate", 30)
     val audio = bool("audio", true)
     val stayAwake = bool("stay_awake", true)
     val stats = bool("stats", false)
+    /** "adb" (sockets that the PC reaches through `adb forward`) or "usb" (see [UsbLink]). */
+    val link = values["link"] ?: "adb"
+    /** Tells this session's data from what an earlier one left in the USB pipe. */
+    val session = values["session"] ?: ""
     /**
      * Encoder settings to use, for finding out which ones a device's encoder dislikes.
      * "prepend" is off by default: the RG556's HEVC encoder blanks the key frames it
@@ -42,6 +50,7 @@ internal class Options(args: Array<String>) {
  *
  * The client reaches it through `adb forward` on the abstract socket [SOCKET]: first a
  * connection for the video one way and the controls the other, then one for the sound.
+ * Or, with `link=usb`, straight over USB ([UsbLink]), all on one connection.
  * When the client goes, the display goes too, its windows move to the device's own
  * screen and this exits.
  */
@@ -50,6 +59,8 @@ object StreamServer {
     /** The client's first check that it reached this server, and which version. */
     private val HELLO = "LumiDeck".toByteArray() + byteArrayOf(0, PROTOCOL_VERSION.toByte())
     private const val CONNECT_TIMEOUT_MS = 15_000L
+    /** Over USB the PC can go without the connection closing: it sends a message every second. */
+    private const val SILENCE_TIMEOUT_MS = 4_000L
 
     private val cleanups = ArrayList<() -> Unit>()
 
@@ -68,7 +79,57 @@ object StreamServer {
         exitProcess(0)
     }
 
+    /** Where the streams go, and where the controls come from. */
+    private class Link(val video: Sink, val audio: Sink?, val controls: InputStream)
+
     private fun run(options: Options) {
+        val link = if (options.link == "usb") connectUsb(options) else connectAdb(options)
+        val keyboard = try {
+            HidKeyboard().also { onCleanUp(it::close) }
+        } catch (e: Exception) {
+            System.err.println("No keyboard: $e")
+            null
+        }
+        val screen = VirtualScreen(options.width, options.height, options.dpi)
+        onCleanUp(screen::release)
+        println("Display ${screen.id}: ${options.width}x${options.height}, ${options.dpi} dpi")
+        runCatching(screen::hideIme).onFailure { System.err.println("Couldn't hide the keyboard UI: $it") }
+        if (options.stayAwake) stayAwake()
+
+        val stream = VideoStream(screen, options.width, options.height, options, link.video)
+        val controls = Controls(link.controls, screen.id, keyboard, stream::requestKeyFrame)
+        thread(name = "controls", isDaemon = true) {
+            try {
+                controls.run()
+            } catch (e: Exception) {
+                System.err.println("Controls stopped: $e")
+            }
+            // The PC went away.
+            cleanUp()
+            exitProcess(0)
+        }
+        if (options.link == "usb") {
+            thread(name = "silence", isDaemon = true) {
+                while (SystemClock.uptimeMillis() - controls.heard < SILENCE_TIMEOUT_MS) Thread.sleep(500)
+                System.err.println("The PC stopped answering")
+                cleanUp()
+                exitProcess(0)
+            }
+        }
+        val audio = link.audio
+        if (audio != null) {
+            thread(name = "audio", isDaemon = true) {
+                try {
+                    AudioStream(audio).run()
+                } catch (e: Exception) {
+                    System.err.println("No sound: $e")
+                }
+            }
+        }
+        stream.run()
+    }
+
+    private fun connectAdb(options: Options): Link {
         val server = LocalServerSocket(SOCKET)
         // Gives up if the client never comes, so a stray server doesn't hold the socket.
         val waiting = thread(isDaemon = true) {
@@ -84,40 +145,16 @@ object StreamServer {
         val audio = if (options.audio) accept(server) else null
         waiting.interrupt()
         server.close()
+        return Link(Sink.of(video.fileDescriptor), audio?.let { Sink.of(it.fileDescriptor) }, video.inputStream)
+    }
 
-        val keyboard = try {
-            HidKeyboard().also { onCleanUp(it::close) }
-        } catch (e: Exception) {
-            System.err.println("No keyboard: $e")
-            null
-        }
-        val screen = VirtualScreen(options.width, options.height, options.dpi)
-        onCleanUp(screen::release)
-        println("Display ${screen.id}: ${options.width}x${options.height}, ${options.dpi} dpi")
-        runCatching(screen::hideIme).onFailure { System.err.println("Couldn't hide the keyboard UI: $it") }
-        if (options.stayAwake) stayAwake()
-
-        val stream = VideoStream(screen, options.width, options.height, options, video.fileDescriptor)
-        thread(name = "controls", isDaemon = true) {
-            try {
-                Controls(video.inputStream, screen.id, keyboard, stream::requestKeyFrame).run()
-            } catch (e: Exception) {
-                System.err.println("Controls stopped: $e")
-            }
-            // The PC went away.
-            cleanUp()
-            exitProcess(0)
-        }
-        if (audio != null) {
-            thread(name = "audio", isDaemon = true) {
-                try {
-                    AudioStream(audio.fileDescriptor).run()
-                } catch (e: Exception) {
-                    System.err.println("No sound: $e")
-                }
-            }
-        }
-        stream.run()
+    private fun connectUsb(options: Options): Link {
+        val usb = UsbLink.open()
+        onCleanUp(usb::close)
+        val video = usb.sink(UsbLink.VIDEO)
+        // The PC skips everything before it.
+        video.write(ByteBuffer.wrap(HELLO + options.session.toByteArray()))
+        return Link(video, if (options.audio) usb.sink(UsbLink.AUDIO) else null, usb.input)
     }
 
     private fun accept(server: LocalServerSocket): LocalSocket {
@@ -157,4 +194,4 @@ object StreamServer {
 }
 
 /** Bumped whenever the client and the server stop understanding each other. */
-internal const val PROTOCOL_VERSION = 1
+internal const val PROTOCOL_VERSION = 2
