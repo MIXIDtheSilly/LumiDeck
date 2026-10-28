@@ -36,12 +36,17 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
     private var sent: List<TaskWindow>? = null
     private val refresh = Runnable(::send)
     private var refreshAt = Long.MAX_VALUE
+    /** When LumiDeck last moved or resized a window, in [SystemClock.uptimeMillis] time. */
+    @Volatile private var resizedAt = 0L
 
     override fun focus(taskId: Int) = command { tasks.moveToFront(taskId) }
 
     override fun minimize(taskId: Int) = command { tasks.moveToBack(taskId) }
 
-    override fun resize(taskId: Int, bounds: Rect) = command { tasks.resize(taskId, bounds) }
+    override fun resize(taskId: Int, bounds: Rect) = command {
+        resizedAt = SystemClock.uptimeMillis()
+        tasks.resize(taskId, bounds)
+    }
 
     override fun close(taskId: Int) = command { tasks.remove(taskId) }
 
@@ -86,7 +91,14 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
 
     private fun start(): Boolean {
         if (!attach()) return false
-        tasks.listen { handler.post { scheduleRefresh() } }
+        tasks.listen {
+            // Soon, so a new window's title bar shows with it, then again once a window
+            // that was opening has shown, and once one moving to another display has
+            // arrived: Android reports both before they happen.
+            handler.post { scheduleRefresh(LISTEN_MS) }
+            handler.postDelayed({ scheduleRefresh() }, SHOWN_MS)
+            handler.postDelayed({ scheduleRefresh() }, SETTLE_MS)
+        }
         scheduleRefresh()
         Log.i(TAG, "Running")
         return true
@@ -108,6 +120,11 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
     private fun send() {
         refreshAt = Long.MAX_VALUE
         val listener = listener ?: return
+        // While a window's being dragged, LumiDeck knows where it is, and a report each time
+        // would only hold up its next frames (the taskbar is built again from each), so the
+        // report waits until it's let go.
+        val dragging = resizedAt + DRAG_QUIET_MS - SystemClock.uptimeMillis()
+        if (dragging > 0) return scheduleRefresh(dragging)
         val windows = try {
             tasks.list()
         } catch (e: ReflectiveOperationException) {
@@ -117,7 +134,8 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
         // Android doesn't report windows being moved, resized or maximised from their title
         // bar, so check again shortly while any are showing.
         if (windows.any { it.visible }) scheduleRefresh(POLL_MS)
-        if (windows == sent) return
+        // Android renews the front window's last-active time at every look, which isn't a change.
+        if (windows.withoutTimes() == sent?.withoutTimes()) return
         try {
             listener.onWindowsChanged(windows)
             sent = windows
@@ -125,6 +143,8 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
             // LumiDeck died; its death notice reconnects.
         }
     }
+
+    private fun List<TaskWindow>.withoutTimes() = map { it.copy(lastActive = 0) }
 
     /**
      * Hands this helper to LumiDeck, starting LumiDeck if needed. Returns false if it
@@ -172,6 +192,11 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
     companion object {
         private const val TAG = "LumiDeckHelper"
         private const val POLL_MS = 250L
+        /** How long after the last move or resize a window counts as let go. */
+        private const val DRAG_QUIET_MS = 150L
+        private const val LISTEN_MS = 16L
+        private const val SHOWN_MS = 150L
+        private const val SETTLE_MS = 500L
 
         @JvmStatic
         fun main(args: Array<String>) {
@@ -227,16 +252,36 @@ private class Tasks {
     /** Minimises: moves the window below the desktop, which then covers it. */
     fun moveToBack(taskId: Int) {
         val token = running().firstOrNull { it.taskId == taskId }?.hidden<Any>("token") ?: return
-        val transaction = Class.forName("android.window.WindowContainerTransaction")
-        val change = transaction.getConstructor().newInstance()
-        transaction.getMethod("reorder", Class.forName("android.window.WindowContainerToken"), Boolean::class.javaPrimitiveType)
-            .invoke(change, token, false)
-        val organizer = method("getWindowOrganizerController").invoke(atm)!!
-        organizer.javaClass.methods.first { it.name == "applyTransaction" && it.parameterCount == 1 }.invoke(organizer, change)
+        transact { change, tokenClass ->
+            change.javaClass.getMethod("reorder", tokenClass, Boolean::class.javaPrimitiveType).invoke(change, token, false)
+        }
     }
 
+    /**
+     * Moves and resizes a window. One that's fullscreen on a display of freeform windows, as
+     * Android leaves windows it moved over from another display, becomes a window again.
+     */
     fun resize(taskId: Int, bounds: Rect) {
-        method("resizeTask").invoke(atm, taskId, bounds, RESIZE_MODE_SYSTEM)
+        // False for windows that aren't freeform.
+        if (resizeTask.invoke(atm, taskId, bounds, RESIZE_MODE_SYSTEM) != false) return
+        val task = running().firstOrNull { it.taskId == taskId } ?: return
+        val window = task.windowConfiguration() ?: return
+        if (window.javaClass.getMethod("getDisplayWindowingMode").invoke(window) != WINDOWING_MODE_FREEFORM) return
+        val token = task.hidden<Any>("token") ?: return
+        transact { change, tokenClass ->
+            change.javaClass.getMethod("setWindowingMode", tokenClass, Int::class.javaPrimitiveType)
+                .invoke(change, token, WINDOWING_MODE_FREEFORM)
+        }
+        // Android gives it bounds of its own as it changes mode, so it moves once it's freeform.
+        resizeTask.invoke(atm, taskId, bounds, RESIZE_MODE_SYSTEM)
+    }
+
+    /** Applies a WindowContainerTransaction that [build] fills in, given it and the token class. */
+    private fun transact(build: (change: Any, tokenClass: Class<*>) -> Unit) {
+        val change = Class.forName("android.window.WindowContainerTransaction").getConstructor().newInstance()
+        build(change, Class.forName("android.window.WindowContainerToken"))
+        val organizer = method("getWindowOrganizerController").invoke(atm)!!
+        organizer.javaClass.methods.first { it.name == "applyTransaction" && it.parameterCount == 1 }.invoke(organizer, change)
     }
 
     fun remove(taskId: Int) {
@@ -269,8 +314,7 @@ private class Tasks {
     }.let { (it as List<*>).filterIsInstance<ActivityManager.RunningTaskInfo>() }
 
     private fun ActivityManager.RunningTaskInfo.toWindow(layers: Map<Int, Int>): TaskWindow? {
-        val config = hidden<Any>("configuration") ?: return null
-        val window = config.javaClass.getField("windowConfiguration").get(config)!!
+        val window = windowConfiguration() ?: return null
         // Leaves out home screens (LumiDeck's own desktop among them), recents and the assistant.
         if (window.javaClass.getMethod("getActivityType").invoke(window) != ACTIVITY_TYPE_STANDARD) return null
         val component = baseIntent.component ?: baseActivity ?: return null
@@ -289,6 +333,14 @@ private class Tasks {
             layer = layers[taskId] ?: Int.MAX_VALUE,
         )
     }
+
+    private fun ActivityManager.RunningTaskInfo.windowConfiguration(): Any? {
+        val config = hidden<Any>("configuration") ?: return null
+        return config.javaClass.getField("windowConfiguration").get(config)
+    }
+
+    /** Found once, as a window being dragged is moved every frame. */
+    private val resizeTask by lazy { method("resizeTask") }
 
     private fun method(name: String) =
         atm.javaClass.methods.firstOrNull { it.name == name } ?: throw NoSuchMethodException(name)

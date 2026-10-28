@@ -153,3 +153,18 @@ private fun DrawScope.drawGlyph(glyph: Glyph, color: Color) {
     }
     drawPath(path, color, style = Stroke(1.5.dp.toPx(), cap = StrokeCap.Round, join = StrokeJoin.Round))
 }
+
+/** How tall title bars are: as tall as Android 13's own, 32dp buttons with 5dp around them. */
+val TitleBarHeight = 42.dp
+
+/**
+ * Whether apps draw no title bar of their own, so LumiDeck's goes above each window rather
+ * than over Android's. That's Android's `persist.debug.caption_on_shell`, which the PC
+ * client turns on, and which apps follow once the device has restarted since.
+ */
+val titleBarsAbove: Boolean by lazy {
+    runCatching {
+        Class.forName("android.os.SystemProperties").getMethod("get", String::class.java)
+            .invoke(null, "persist.debug.caption_on_shell") == "true"
+    }.getOrDefault(false)
+}

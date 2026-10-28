@@ -15,6 +15,7 @@ import app.lumideck.data.LumiPrefs
 import app.lumideck.data.PanelFloat
 import app.lumideck.helper.HelperLink
 import app.lumideck.helper.TaskWindow
+import kotlin.math.roundToInt
 
 /**
  * The app windows on the desktop's display. Opens apps as windows, cascading each new one
@@ -30,6 +31,9 @@ class Windows(private val activity: Activity) {
 
     /** Where maximised windows go back to, by task id. */
     private val restoreBounds = mutableMapOf<Int, Rect>()
+
+    /** Fullscreen windows [adopt] has made windows again, by task id. */
+    private val adopted = mutableSetOf<Int>()
 
     val displayId: Int get() = ContextCompat.getDisplayOrDefault(activity).displayId
 
@@ -106,6 +110,27 @@ class Windows(private val activity: Activity) {
         HelperLink.focus(taskId)
     }
 
+    /**
+     * Maximises the fullscreen windows among [shown] on this display, which have no title bar
+     * and can't be moved. Android leaves windows fullscreen when it moves them over from the
+     * device's own screen, as it does when a PC session ends. Once each: without freeform
+     * windowing (see the class notes) they stay fullscreen. Also moves windows down that
+     * start too high for their title bar.
+     */
+    fun adopt(shown: List<TaskWindow>) {
+        val area = maximizedArea()
+        if (area.isEmpty) return
+        for (window in shown) {
+            if (window.displayId != displayId || !window.visible) continue
+            if (window.freeform) {
+                // Windows Android places itself can start too high for a title bar above them.
+                if (window.bounds.top < area.top) HelperLink.resize(window.taskId, Rect(window.bounds).apply { offset(0, area.top - top) })
+            } else if (adopted.add(window.taskId)) {
+                HelperLink.resize(window.taskId, area)
+            }
+        }
+    }
+
     private fun arrange(window: TaskWindow, bounds: Rect) {
         // Windows that fill the screen whatever their bounds say can't be arranged.
         if (!window.freeform) return
@@ -128,9 +153,10 @@ class Windows(private val activity: Activity) {
     fun maximizedArea() = areaAbove(attached = prefs.panelFloat != PanelFloat.Always)
 
     /**
-     * The screen above the taskbar, [attached] to the edge or floating. Windows stay inside
-     * it because the taskbar (and the system nav bar under it) stays on top and would
-     * otherwise cover their bottom edge.
+     * The screen above the taskbar, [attached] to the edge or floating, below the title bars
+     * when they go above windows ([titleBarsAbove]). Windows stay inside it because the
+     * taskbar (and the system nav bar under it) stays on top and would otherwise cover their
+     * bottom edge.
      */
     private fun areaAbove(attached: Boolean): Rect {
         // The desktop's window covers the whole screen, nav bar included, unlike displayMetrics.
@@ -139,7 +165,8 @@ class Windows(private val activity: Activity) {
             ?.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
         val density = activity.resources.displayMetrics.density
         val taskbar = (panelFootprint(prefs.taskbarSize, attached).value * density).toInt()
-        return Rect(0, 0, desktop.width, desktop.height - navBar - taskbar)
+        val top = if (titleBarsAbove) (TitleBarHeight.value * density).roundToInt() else 0
+        return Rect(0, top, desktop.width, desktop.height - navBar - taskbar)
     }
 
     private fun nextBounds(): Rect {
@@ -152,9 +179,9 @@ class Windows(private val activity: Activity) {
         val i = cascade++ % steps
 
         val left = (area.width() - width) / 2 - step * (steps / 2) + step * i
-        val top = (area.height() - height) / 2 - step * (steps / 2) + step * i
+        val top = area.top + (area.height() - height) / 2 - step * (steps / 2) + step * i
         return Rect(left, top, left + width, top + height).apply {
-            offset(maxOf(0, -this.left), maxOf(0, -this.top))
+            offset(maxOf(0, -this.left), maxOf(0, area.top - this.top))
         }
     }
 }

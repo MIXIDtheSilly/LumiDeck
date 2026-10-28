@@ -55,7 +55,8 @@ class TaskbarOverlay(
     private val handler = Handler(Looper.getMainLooper())
 
     /** Windows were added since the menu window, so they're in front of it (see [addUnderMenus]). */
-    private var menuBuried = false
+    /** Set from the thread window edges run on, too. */
+    @Volatile private var menuBuried = false
 
     /** Called when the taskbar's window changes height. */
     var onTaskbarResize: () -> Unit = {}

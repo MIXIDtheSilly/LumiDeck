@@ -9,12 +9,18 @@ import android.graphics.drawable.GradientDrawable
 import android.graphics.RegionIterator
 import android.os.Build
 import android.os.Handler
+import android.os.HandlerThread
 import android.os.Looper
+import android.os.Parcel
 import android.os.SystemClock
 import android.view.Choreographer
 import android.view.Gravity
 import android.view.MotionEvent
 import android.view.PointerIcon
+import android.view.SurfaceControl
+import android.view.SurfaceControlViewHost
+import android.view.SurfaceHolder
+import android.view.SurfaceView
 import android.view.View
 import android.view.ViewConfiguration
 import android.view.WindowManager.LayoutParams
@@ -47,8 +53,9 @@ import kotlin.math.roundToInt
  *
  * Android 13 gives every window a dark grey title bar of its own, but can't move windows by
  * it on LumiDeck's displays, nor resize them by their edges: it fails to take over the
- * pointer there ("Unable to transfer touch focus"). So LumiDeck covers that title bar with
- * its own and moves and resizes windows through the window helper.
+ * pointer there ("Unable to transfer touch focus"). So LumiDeck draws its own and moves and
+ * resizes windows through the window helper. With Android's turned off ([titleBarsAbove]),
+ * LumiDeck's sits just above each window; otherwise it covers Android's.
  *
  * They're drawn in windows above every app (see [TaskbarOverlay]), so each app window's
  * title bar and edges only take up the parts no window in front of it covers, cut into
@@ -69,8 +76,23 @@ class WindowDecor(
     private val handler = Handler(Looper.getMainLooper())
     private val sender = BoundsSender()
     private val preview = SnapPreview()
+    private val dragBar = DragBar { hidden ->
+        // Its title bar's own window is hidden, and left where it is, once the drag bar shows.
+        val moving = gesture?.takeIf { it.edges == 0 }?.taskId
+        val concealed = pool.filter { moving != null && it.piece?.taskId == moving }
+        concealed.forEach { it.conceal(true) }
+        layout()
+        concealed.firstOrNull()?.afterDraw(hidden) ?: hidden()
+    }
     private var started = false
     private var job: Job? = null
+
+    /**
+     * The thread the windows along the windows' edges run on. Showing, hiding or moving any
+     * of LumiDeck's windows is a relayout of ~12 ms on the RG556, and the many it takes as a
+     * window is picked up held the drag up on the main thread for a quarter of a second.
+     */
+    private var edges: Handler? = null
 
     /** The windows showing the pieces, kept for reuse so the menus stay in front of them. */
     private val pool = mutableListOf<PieceWindow>()
@@ -78,23 +100,46 @@ class WindowDecor(
     /** The window being moved or resized. */
     private var gesture: Gesture? = null
 
+    /**
+     * The window pressed on, laid out from the press as if it were already being moved (see
+     * [heldArea]), so the relayouts that takes are done by the time the press turns into a drag.
+     */
+    private var pressed: Int? = null
+
     /** A window LumiDeck brought to the front, and maybe moved, that the helper hasn't reported yet. */
     private var expected: Expected? = null
+
+    /** The desktop's size goes into where title bars fit, and it has none yet when a new display starts. */
+    private val resized = View.OnLayoutChangeListener { _, left, top, right, bottom, oldLeft, oldTop, oldRight, oldBottom ->
+        if (right - left != oldRight - oldLeft || bottom - top != oldBottom - oldTop) refresh()
+    }
 
     fun start() {
         if (started) return
         // Before collecting, which starts right away with the current windows.
         started = true
-        job = activity.lifecycleScope.launch { HelperLink.windows.collect { layout() } }
+        edges = Handler(HandlerThread("LumiDeck window edges").apply { start() }.looper)
+        activity.window.decorView.addOnLayoutChangeListener(resized)
+        job = activity.lifecycleScope.launch { HelperLink.windows.collect { refresh() } }
+        dragBar.prepare()
+    }
+
+    private fun refresh() {
+        windows.adopt(HelperLink.windows.value.orEmpty())
+        layout()
     }
 
     fun stop() {
         started = false
+        activity.window.decorView.removeOnLayoutChangeListener(resized)
         job?.cancel()
         job = null
         pool.forEach { it.remove() }
         pool.clear()
+        edges?.let { it.post { it.looper.quitSafely() } }
+        edges = null
         preview.remove()
+        dragBar.remove()
         gesture = null
         expected = null
     }
@@ -115,12 +160,21 @@ class WindowDecor(
                 focused = if (raised != null) window === raised else window.focused,
             )
         }
-        place(framePieces(frames))
+        place(framePieces(frames), heldArea(frames))
+    }
+
+    /**
+     * What the window being moved or resized covers, with its edges when they show. The
+     * other windows' pieces aren't cut to it but drawn around it (see [framePieces]).
+     */
+    private fun heldArea(frames: List<Frame>): Rect? {
+        val taskId = gesture?.taskId ?: pressed ?: return null
+        val frame = frames.firstOrNull { it.window.taskId == taskId } ?: return null
+        return outline(frame.bounds).apply { if ((gesture?.edges ?: 0) != 0) inset(-GripWidth.px(), -GripWidth.px()) }
     }
 
     /** What's left of each window's title bar and edges once the windows in front of it, and the taskbar, are taken out. */
     private fun framePieces(frames: List<Frame>): List<Piece> {
-        val caption = CaptionHeight.px()
         val grip = GripWidth.px()
         val desktop = activity.window.decorView
         val screen = Rect(0, 0, desktop.width, desktop.height)
@@ -128,43 +182,66 @@ class WindowDecor(
         val titles = mutableListOf<Piece>()
         val edges = mutableListOf<Pair<Frame, Region>>()
         val edgesInFront = Region()
+        // Every piece that moves costs Android a relayout, which takes this device ~12 ms,
+        // so a window being moved goes without its edges until it's let go, and its title
+        // bar slides along in the drag bar (see [DragBar]). The other windows' pieces aren't
+        // cut to the window being moved or resized, which would move them at every step, but
+        // stay as they are and leave out what it covers as they're drawn ([heldArea]).
+        val held = gesture?.taskId ?: pressed
+        val moving = held?.takeIf { gesture?.edges == 0 }
+        val dragged = moving?.takeIf { dragBar.showing }
         for (frame in frames) {
-            val bounds = frame.bounds
-            if (frame.window.freeform) {
-                val title = Region(bounds.left, bounds.top, bounds.right, bounds.top + caption)
+            val bounds = if (frame.window.freeform) outline(frame.bounds) else frame.bounds
+            if (frame.window.freeform && frame.window.taskId != dragged) {
+                val title = Region(titleArea(frame.bounds))
                 title.op(screen, Region.Op.INTERSECT)
                 title.op(covered, Region.Op.DIFFERENCE)
                 title.rects().mapTo(titles) { Piece(frame, title = true, it) }
-
+            }
+            if (frame.window.freeform && frame.window.taskId != moving) {
                 val ring = Region(bounds.left - grip, bounds.top - grip, bounds.right + grip, bounds.bottom + grip)
                 ring.op(bounds, Region.Op.DIFFERENCE)
                 ring.op(screen, Region.Op.INTERSECT)
                 ring.op(covered, Region.Op.DIFFERENCE)
                 ring.op(edgesInFront, Region.Op.DIFFERENCE)
-                edgesInFront.op(ring, Region.Op.UNION)
+                if (frame.window.taskId != held) edgesInFront.op(ring, Region.Op.UNION)
                 edges += frame to ring
             }
-            covered.op(bounds, Region.Op.UNION)
+            if (frame.window.taskId != held) covered.op(bounds, Region.Op.UNION)
         }
         // Title bars go over the edges of windows in front of them, which are only a shadow.
-        val allTitles = Region().apply { titles.forEach { op(it.rect, Region.Op.UNION) } }
+        val allTitles = Region().apply { titles.forEach { if (it.taskId != held) op(it.rect, Region.Op.UNION) } }
+        val heldTitles = Region().apply { titles.forEach { if (it.taskId == held) op(it.rect, Region.Op.UNION) } }
         return titles + edges.flatMap { (frame, ring) ->
             ring.op(allTitles, Region.Op.DIFFERENCE)
+            if (frame.window.taskId == held) ring.op(heldTitles, Region.Op.DIFFERENCE)
             ring.rects().map { Piece(frame, title = false, it) }
         }
     }
 
-    /** Shows [pieces], each in the window that showed the most of it before. */
-    private fun place(pieces: List<Piece>) {
+    /** The title bar of a window at [bounds]: above them, or over Android's own at their top. */
+    private fun titleArea(bounds: Rect): Rect {
+        val caption = TitleBarHeight.px()
+        return if (titleBarsAbove) Rect(bounds.left, bounds.top - caption, bounds.right, bounds.top)
+        else Rect(bounds.left, bounds.top, bounds.right, bounds.top + caption)
+    }
+
+    /** All of a window at [bounds], its title bar included. */
+    private fun outline(bounds: Rect) = Rect(bounds).apply { top = minOf(top, titleArea(bounds).top) }
+
+    /** Shows [pieces], each in the window that showed the most of it before, leaving [held] out of other windows' pieces. */
+    private fun place(pieces: List<Piece>, held: Rect?) {
         val placed = LinkedHashMap<Piece, PieceWindow>()
-        // One being pressed sticks to its piece, or Android would end the press.
+        // One being pressed sticks to its piece, or Android would end the press, and stays
+        // put while it has none (its window is being moved).
+        val kept = mutableSetOf<PieceWindow>()
         for (window in pool.filter { it.busy }) {
             val old = window.piece ?: continue
             pieces.filter { it !in placed && it.title == window.forTitle && it.taskId == old.taskId }
                 .maxByOrNull { overlap(it.rect, old.rect) }
-                ?.let { placed[it] = window }
+                ?.let { placed[it] = window } ?: kept.add(window)
         }
-        val free = (pool - placed.values.toSet()).toMutableList()
+        val free = (pool - placed.values.toSet() - kept).toMutableList()
         for (piece in pieces) {
             if (piece in placed) continue
             val window = free.filter { it.forTitle == piece.title }.maxByOrNull { it.likeness(piece) }
@@ -172,20 +249,28 @@ class WindowDecor(
             free -= window
             placed[piece] = window
         }
-        placed.forEach { (piece, window) -> window.show(piece) }
+        placed.forEach { (piece, window) -> window.show(piece, held?.takeIf { piece.taskId != (gesture?.taskId ?: pressed) }) }
         free.forEach { it.hide() }
     }
 
-    private fun press(frame: Frame) {
+    /** A press on [frame]'s title bar, or on its edges ([byTitle] false). */
+    private fun press(frame: Frame, byTitle: Boolean = true) {
         state.closeMenus()
         if (!frame.focused) HelperLink.focus(frame.window.taskId)
         expected = Expected(frame.window.taskId, expected?.bounds?.takeIf { expected?.taskId == frame.window.taskId })
+        pressed = frame.window.taskId
+        if (byTitle) dragBar.warm(frame.window, frame.bounds.width())
         layout()
     }
 
-    /** The press on [frame] has ended without a drag. */
+    /** The press on a title bar has ended, after a drag ([endDrag]) or none. */
     private fun release() {
+        if (pressed != null) {
+            pressed = null
+            layout()
+        }
         if (gesture == null) settle()
+        if (!dragBar.showing) dragBar.hide()
     }
 
     /** Starts moving the window, or resizing it by [edges], from where the pointer is ([x], [y]) on screen. */
@@ -198,34 +283,45 @@ class WindowDecor(
             start = Rect(left, start.top, left + restored.width(), start.top + restored.height())
         }
         gesture = Gesture(frame.window.taskId, x, y, start, edges)
+        if (edges == 0) dragBar.show(frame.window, start.width(), titleArea(gesture!!.moved(x, y)))
         dragTo(x, y)
     }
 
     private fun dragTo(x: Float, y: Float) {
         val gesture = gesture ?: return
         val bounds = if (gesture.edges == 0) gesture.moved(x, y) else gesture.resized(x, y)
+        expected = Expected(gesture.taskId, bounds)
+        // First, so the window gets there with the drag bar. A resize redraws the app, so it
+        // waits between steps; the frame follows as the app is told, so the two stay together.
+        sender.send(gesture.taskId, bounds, if (gesture.edges == 0) 0L else RESIZE_INTERVAL_MS)
         if (gesture.edges == 0) {
+            dragBar.moveTo(titleArea(bounds))
             gesture.snap = snapTarget(x, y)
             preview.show(gesture.snap)
         }
-        expected = Expected(gesture.taskId, bounds)
-        layout()
-        // Moving is cheap, but a resize redraws the app, so it waits between steps.
-        sender.send(gesture.taskId, bounds, if (gesture.edges == 0) 0L else RESIZE_INTERVAL_MS)
     }
 
     private fun endDrag() {
         val gesture = gesture ?: return
         this.gesture = null
+        pressed = null
         sender.flush()
         preview.show(null)
         gesture.snap?.let { bounds ->
             // It goes back to the size it had, where it was picked up, when it's restored.
             windows.place(gesture.taskId, bounds, restore = gesture.start)
             expected = Expected(gesture.taskId, bounds)
-            layout()
         }
+        // With its edges back.
+        layout()
         settle()
+        if (gesture.edges == 0) {
+            // Once its title bar's own window has had two frames to get there.
+            handler.postDelayed({
+                pool.forEach { it.conceal(false) }
+                handler.postDelayed({ if (this.gesture == null) dragBar.hide() }, HANDOVER_MS)
+            }, HANDOVER_MS)
+        }
     }
 
     /**
@@ -257,8 +353,9 @@ class WindowDecor(
         val desktop = activity.window.decorView
         val keep = (KEEP_VISIBLE * density).roundToInt()
         val left = bounds.left.coerceIn(keep - bounds.width(), maxOf(keep - bounds.width(), desktop.width - keep))
-        val bottom = overlay.taskbarArea().top - CaptionHeight.px()
-        val top = bounds.top.coerceIn(0, maxOf(0, bottom))
+        val highest = bounds.top - titleArea(bounds).top
+        val lowest = overlay.taskbarArea().top - titleArea(bounds).bottom + bounds.top
+        val top = bounds.top.coerceIn(highest, maxOf(highest, lowest))
         bounds.offsetTo(left, top)
         return bounds
     }
@@ -269,10 +366,12 @@ class WindowDecor(
         val minWidth = (MIN_WIDTH * density).roundToInt()
         val minHeight = (MIN_HEIGHT * density).roundToInt()
         val screenBottom = activity.window.decorView.height
+        // The title bar stays on screen.
+        val highest = start.top - titleArea(start).top
         return Rect(start).apply {
             if (edges and LEFT != 0) left = minOf(start.left + dx, start.right - minWidth)
             if (edges and RIGHT != 0) right = maxOf(start.right + dx, start.left + minWidth)
-            if (edges and TOP != 0) top = minOf(maxOf(start.top + dy, 0), start.bottom - minHeight)
+            if (edges and TOP != 0) top = minOf(maxOf(start.top + dy, highest), start.bottom - minHeight)
             if (edges and BOTTOM != 0) bottom = maxOf(minOf(start.bottom + dy, screenBottom), start.top + minHeight)
         }
     }
@@ -298,11 +397,19 @@ class WindowDecor(
 
     /** One of the windows the pieces are shown in. Hidden ones wait to be reused. */
     private inner class PieceWindow(val forTitle: Boolean) {
-        var piece by mutableStateOf<Piece?>(null)
+        var piece: Piece? = null
+            private set
+
+        /** What its title bar shows, which a window only moving doesn't change, so it isn't drawn again. */
+        var look by mutableStateOf<TitleLook?>(null)
             private set
 
         /** Being pressed or dragged. */
         var busy = false
+
+        /** The part of it left out as it's drawn, in its own coordinates. */
+        var cut: Rect? = null
+            private set
 
         private var added = false
         private val params = LayoutParams(
@@ -315,6 +422,7 @@ class WindowDecor(
         ).apply {
             gravity = Gravity.TOP or Gravity.LEFT
             windowAnimations = 0
+            preventMoveAnimation()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
             title = if (forTitle) "LumiDeck title bar" else "LumiDeck window edge"
         }
@@ -325,32 +433,86 @@ class WindowDecor(
             return if (old.taskId == piece.taskId) overlap(old.rect, piece.rect) + 1 else 0
         }
 
-        fun show(piece: Piece) {
+        /** Shows [piece], but not where it's under [over], given on screen. */
+        fun show(piece: Piece, over: Rect?) {
             val r = piece.rect
             val moved = params.x != r.left || params.y != r.top || params.width != r.width() || params.height != r.height()
             this.piece = piece
+            val cut = over?.let { Rect(it).apply { offset(-r.left, -r.top) } }?.takeIf { it.intersect(0, 0, r.width(), r.height()) }
+            val cutChanged = cut != this.cut
+            this.cut = cut
+            if (forTitle) {
+                val frame = piece.frame
+                look = TitleLook(
+                    frame.window.taskId,
+                    frame.window.component.packageName,
+                    frame.focused,
+                    windows.isMaximized(frame.window),
+                    frame.bounds.width(),
+                    frame.bounds.left - r.left,
+                    titleArea(frame.bounds).top - r.top,
+                )
+            }
             params.x = r.left
             params.y = r.top
             params.width = r.width()
             params.height = r.height()
-            if (!added) {
-                overlay.addUnderMenus(view, params)
-                added = true
-            } else if (moved) {
-                overlay.updateWindow(view, params)
+            // An edge's own thread gets a copy, as these change again meanwhile.
+            val params = if (forTitle) params else LayoutParams().apply { copyFrom(params) }
+            val first = !added
+            added = true
+            val edge = if (forTitle) null else EdgeLook(Rect(r), Rect(piece.frame.bounds), cut)
+            onViewThread {
+                if (first) overlay.addUnderMenus(view, params) else if (moved) overlay.updateWindow(view, params)
+                view.visibility = View.VISIBLE
+                // An edge is drawn from its window's bounds, so only once they change.
+                if (view is EdgeView) {
+                    if (view.look != edge) view.invalidate()
+                    view.look = edge
+                } else if (cutChanged) {
+                    view.invalidate()
+                }
             }
-            view.visibility = View.VISIBLE
-            if (!forTitle) view.invalidate()
         }
 
         fun hide() {
             piece = null
+            look = null
             busy = false
-            view.visibility = View.GONE
+            cut = null
+            onViewThread {
+                view.visibility = View.GONE
+                view.alpha = 1f
+                if (view is EdgeView) view.look = null
+            }
+        }
+
+        /** Runs [block] on the thread the window runs on: the main one, or for an edge, [edges]. */
+        private fun onViewThread(block: () -> Unit) {
+            if (forTitle) block() else edges?.post(block)
+        }
+
+        /** Hides what it shows while [DragBar] shows its title bar elsewhere, but still takes the pointer. */
+        fun conceal(hidden: Boolean) {
+            view.alpha = if (hidden) 0f else 1f
+        }
+
+        /** Runs [block] once what it shows now is on screen, or after [DRAWN_MS] at the latest. */
+        fun afterDraw(block: () -> Unit) {
+            var done = false
+            val once = {
+                if (!done) {
+                    done = true
+                    block()
+                }
+            }
+            view.viewTreeObserver.registerFrameCommitCallback(once)
+            view.invalidate()
+            handler.postDelayed(once, DRAWN_MS)
         }
 
         fun remove() {
-            if (added) overlay.removeWindow(view)
+            if (added) onViewThread { overlay.removeWindow(view) }
             added = false
         }
     }
@@ -358,25 +520,23 @@ class WindowDecor(
     /** A title bar, or the part of one that's in view. */
     @Composable
     private fun TitleContent(window: PieceWindow) {
-        val piece = window.piece ?: return
-        val frame = piece.frame
-        val task = frame.window
-        val item = state.taskbarItems.firstOrNull { item -> item.windows.any { it.taskId == task.taskId } }
+        val look = window.look ?: return
+        val item = state.taskbarItems.firstOrNull { item -> item.windows.any { it.taskId == look.taskId } }
+        // The window as it is when a button's clicked, since moving it doesn't come through here.
+        val task = { window.piece?.frame?.window }
         Box(Modifier.fillMaxSize().clipToBounds()) {
             TitleBar(
-                title = item?.label ?: task.component.packageName,
+                title = item?.label ?: look.packageName,
                 icon = item?.icon,
-                focused = frame.focused,
-                maximized = windows.isMaximized(task),
-                onMinimize = { windows.minimize(task) },
-                onToggleMaximized = { windows.toggleMaximized(task) },
-                onClose = { windows.close(task) },
+                focused = look.focused,
+                maximized = look.maximized,
+                onMinimize = { task()?.let(windows::minimize) },
+                onToggleMaximized = { task()?.let(windows::toggleMaximized) },
+                onClose = { task()?.let(windows::close) },
                 // The whole bar, placed so this window shows its part.
                 modifier = Modifier.layout { measurable, constraints ->
-                    val bar = measurable.measure(Constraints.fixed(frame.bounds.width(), CaptionHeight.px()))
-                    layout(constraints.maxWidth, constraints.maxHeight) {
-                        bar.place(frame.bounds.left - piece.rect.left, frame.bounds.top - piece.rect.top)
-                    }
+                    val bar = measurable.measure(Constraints.fixed(look.width, TitleBarHeight.px()))
+                    layout(constraints.maxWidth, constraints.maxHeight) { bar.place(look.dx, look.dy) }
                 },
             )
         }
@@ -401,6 +561,11 @@ class WindowDecor(
                 release()
             }
             return handled
+        }
+
+        override fun dispatchDraw(canvas: Canvas) {
+            window.cut?.let(canvas::clipOutRect)
+            super.dispatchDraw(canvas)
         }
 
         override fun onInterceptTouchEvent(event: MotionEvent) = track(event)
@@ -442,17 +607,27 @@ class WindowDecor(
     private inner class EdgeView(private val window: PieceWindow) : View(activity) {
         private val paint = Paint().apply { style = Paint.Style.STROKE }
 
+        /** What it shows, as its own thread last heard. */
+        var look: EdgeLook? = null
+
+        /** On the edges' thread, so what it does goes over to the main one. */
         override fun onTouchEvent(event: MotionEvent): Boolean {
-            val frame = window.piece?.frame ?: return false
+            if (look == null) return false
+            val x = event.rawX
+            val y = event.rawY
+            val main = this@WindowDecor.handler
             when (event.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     if (!event.isPrimary()) return false
-                    window.busy = true
-                    press(frame)
-                    beginDrag(frame, event.rawX, event.rawY, edgesAt(frame.bounds, event.rawX, event.rawY))
+                    main.post {
+                        val frame = window.piece?.frame ?: return@post
+                        window.busy = true
+                        press(frame, byTitle = false)
+                        beginDrag(frame, x, y, edgesAt(outline(frame.bounds), x, y))
+                    }
                 }
-                MotionEvent.ACTION_MOVE -> dragTo(event.rawX, event.rawY)
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                MotionEvent.ACTION_MOVE -> main.post { dragTo(x, y) }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> main.post {
                     window.busy = false
                     endDrag()
                 }
@@ -461,8 +636,8 @@ class WindowDecor(
         }
 
         override fun onResolvePointerIcon(event: MotionEvent, pointerIndex: Int): PointerIcon? {
-            val frame = window.piece?.frame ?: return null
-            val type = when (edgesAt(frame.bounds, event.getRawX(pointerIndex), event.getRawY(pointerIndex))) {
+            val look = look ?: return null
+            val type = when (edgesAt(outline(look.bounds), event.getRawX(pointerIndex), event.getRawY(pointerIndex))) {
                 LEFT, RIGHT -> PointerIcon.TYPE_HORIZONTAL_DOUBLE_ARROW
                 TOP, BOTTOM -> PointerIcon.TYPE_VERTICAL_DOUBLE_ARROW
                 LEFT or TOP, RIGHT or BOTTOM -> PointerIcon.TYPE_TOP_LEFT_DIAGONAL_DOUBLE_ARROW
@@ -472,10 +647,11 @@ class WindowDecor(
         }
 
         override fun onDraw(canvas: Canvas) {
-            val piece = window.piece ?: return
-            val b = piece.frame.bounds
+            val look = look ?: return
+            val b = outline(look.bounds)
             val grip = GripWidth.px()
-            canvas.translate(-piece.rect.left.toFloat(), -piece.rect.top.toFloat())
+            look.cut?.let(canvas::clipOutRect)
+            canvas.translate(-look.rect.left.toFloat(), -look.rect.top.toFloat())
             // One-pixel rings fading out from the window's edge.
             for (i in 1..grip) {
                 val fade = 1f - (i - 1f) / grip
@@ -486,8 +662,8 @@ class WindowDecor(
     }
 
     /**
-     * Sends a window's new bounds to the helper: right away with no [interval], or else at
-     * most every [interval] ms.
+     * Sends a window's new bounds to the helper, and fits its frame to them: right away with
+     * no [interval], or else at most every [interval] ms.
      */
     private inner class BoundsSender {
         private var pending: Pair<Int, Rect>? = null
@@ -513,6 +689,210 @@ class WindowDecor(
             pending = null
             lastSent = SystemClock.uptimeMillis()
             HelperLink.resize(taskId, bounds)
+            layout()
+        }
+    }
+
+    /**
+     * The title bar of the window being moved. It's drawn in a surface of its own that's
+     * moved straight in SurfaceFlinger, as Android moves the window itself, so the two move
+     * together, in the same frame, and moving costs nothing on LumiDeck's side. Moving the
+     * title bar's own window instead costs a relayout each step (see [framePieces]). It
+     * doesn't take the pointer: the press stays with the title bar's own window, hidden
+     * once this shows ([onShown]).
+     */
+    private inner class DragBar(private val onShown: (hidden: () -> Unit) -> Unit) {
+        /** A window over the screen that's only there during a drag, for the surface to show in. */
+        private var host: FrameLayout? = null
+        /** The surface's holder, as wide as the screen and as tall as a title bar. Never laid out again, so Android leaves its surface where it's moved to. */
+        private var holder: SurfaceView? = null
+        private var viewHost: SurfaceControlViewHost? = null
+        /**
+         * What the surface shows, see-through until a drag puts the surface over the window:
+         * Android shows it at the top left of the screen from the press, when the window it's
+         * in is put up, as it may become a drag.
+         */
+        private var bar: View? = null
+        private var ready = false
+        private var width = 0
+        private var at: Rect? = null
+        private var look by mutableStateOf<TitleLook?>(null)
+        /**
+         * Not [LayoutParams.FLAG_NOT_TOUCHABLE], as Android draws apps' overlay windows that
+         * are at no more than 80% opacity, so others can be seen through them. It's only up
+         * from a press to its end, while the press stays with the window it started in.
+         */
+        private val params = LayoutParams(
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.MATCH_PARENT,
+            LayoutParams.TYPE_APPLICATION_OVERLAY,
+            LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN or LayoutParams.FLAG_LAYOUT_NO_LIMITS,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
+            gravity = Gravity.TOP or Gravity.LEFT
+            windowAnimations = 0
+            preventMoveAnimation()
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
+            title = "LumiDeck dragged title bar"
+        }
+
+        /** Showing a title bar, from once it's drawn after [show] until [hide]. */
+        var showing = false
+            private set
+
+        /** Shown, and drawing the bar for the first time. */
+        private var revealing = false
+
+        /** Moving with the drag, once the window's own title bar is hidden. */
+        private var following = false
+
+        /** Where the drag started: over the window's own title bar. */
+        private var from: Rect? = null
+
+        /** Adds the window, hidden, ahead of the first drag. */
+        fun prepare() {
+            if (host != null) return
+            val holder = SurfaceView(activity).apply {
+                setZOrderOnTop(true)
+                holder.setFormat(PixelFormat.TRANSLUCENT)
+                layoutParams = FrameLayout.LayoutParams(activity.resources.displayMetrics.widthPixels, TitleBarHeight.px())
+                holder.addCallback(object : SurfaceHolder.Callback {
+                    override fun surfaceCreated(h: SurfaceHolder) {
+                        ready = true
+                        place()
+                    }
+
+                    override fun surfaceChanged(h: SurfaceHolder, format: Int, width: Int, height: Int) = Unit
+
+                    override fun surfaceDestroyed(h: SurfaceHolder) {
+                        ready = false
+                        showing = false
+                        revealing = false
+                        following = false
+                    }
+                })
+            }
+            this.holder = holder
+            host = FrameLayout(activity).apply {
+                addView(holder)
+                visibility = View.GONE
+                // A press that lands on it all the same, when it was somehow left up, takes it down.
+                setOnTouchListener { _, event ->
+                    if (event.actionMasked == MotionEvent.ACTION_DOWN && gesture == null) handler.post { hide() }
+                    false
+                }
+            }.also { overlay.addUnderMenus(it, params) }
+        }
+
+        /**
+         * Gets ready to show [window]'s title bar, [width] wide, as a press on it may turn
+         * into a drag: putting up the window and drawing the bar take a relayout each, which
+         * would hold up the drag's first steps.
+         */
+        fun warm(window: TaskWindow, width: Int) {
+            prepare()
+            val holder = holder ?: return
+            if (viewHost == null) {
+                val token = holder.hostToken ?: return
+                val viewHost = SurfaceControlViewHost(activity, activity.display!!, token)
+                val bar = overlay.withContent(FrameLayout(activity)) { DragTitle() }.apply { alpha = 0f }
+                viewHost.setView(bar, 1, TitleBarHeight.px())
+                holder.setChildSurfacePackage(viewHost.surfacePackage ?: return)
+                this.viewHost = viewHost
+                this.bar = bar
+            }
+            look = TitleLook(window.taskId, window.component.packageName, focused = true, maximized = false, width, 0, 0)
+            if (width != this.width) {
+                this.width = width
+                viewHost?.relayout(width, TitleBarHeight.px())
+            }
+            host?.visibility = View.VISIBLE
+        }
+
+        /** Shows [window]'s title bar, [width] wide, at [title], once the surface is there. */
+        fun show(window: TaskWindow, width: Int, title: Rect) {
+            warm(window, width)
+            at = title
+            from = title
+            if (ready) place()
+        }
+
+        fun moveTo(title: Rect) {
+            at = title
+            if (following) place()
+        }
+
+        /**
+         * Puts the surface where the title bar is. At first it's over the window's own title
+         * bar, which looks the same, until that's hidden ([onShown]) once the bar's been
+         * drawn, so there's only ever one, and then it moves with the drag.
+         */
+        private fun place() {
+            val title = (if (following) at else from) ?: return
+            val surface = holder?.surfaceControl ?: return
+            SurfaceControl.Transaction()
+                .setPosition(surface, title.left.toFloat(), title.top.toFloat())
+                .setVisibility(surface, true)
+                .apply()
+            if (showing || revealing) return
+            val bar = bar ?: return
+            revealing = true
+            bar.alpha = 1f
+            bar.viewTreeObserver.registerFrameCommitCallback {
+                if (!revealing) return@registerFrameCommitCallback
+                revealing = false
+                showing = true
+                onShown {
+                    if (showing && !following) {
+                        following = true
+                        place()
+                    }
+                }
+            }
+        }
+
+        fun hide() {
+            at = null
+            from = null
+            look = null
+            showing = false
+            revealing = false
+            following = false
+            bar?.alpha = 0f
+            host?.visibility = View.GONE
+        }
+
+        fun remove() {
+            viewHost?.release()
+            viewHost = null
+            bar = null
+            revealing = false
+            following = false
+            from = null
+            host?.let(overlay::removeWindow)
+            host = null
+            holder = null
+            ready = false
+            showing = false
+            width = 0
+            at = null
+            look = null
+        }
+
+        @Composable
+        private fun DragTitle() {
+            val look = look ?: return
+            val item = state.taskbarItems.firstOrNull { item -> item.windows.any { it.taskId == look.taskId } }
+            TitleBar(
+                title = item?.label ?: look.packageName,
+                icon = item?.icon,
+                focused = true,
+                maximized = false,
+                onMinimize = {},
+                onToggleMaximized = {},
+                onClose = {},
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
 
@@ -530,6 +910,7 @@ class WindowDecor(
         ).apply {
             gravity = Gravity.TOP or Gravity.LEFT
             windowAnimations = 0
+            preventMoveAnimation()
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) fitInsetsTypes = 0
             title = "LumiDeck snap outline"
         }
@@ -573,6 +954,20 @@ class WindowDecor(
     /** A window as its frame is drawn: where it is, perhaps ahead of Android. */
     private data class Frame(val window: TaskWindow, val bounds: Rect, val focused: Boolean)
 
+    /** A title bar as drawn: [width] wide, placed at [dx], [dy] in the window showing part of it. */
+    private data class TitleLook(
+        val taskId: Int,
+        val packageName: String,
+        val focused: Boolean,
+        val maximized: Boolean,
+        val width: Int,
+        val dx: Int,
+        val dy: Int,
+    )
+
+    /** A strip along a window's edges as drawn: where it is, around a window at [bounds], less [cut]. */
+    private data class EdgeLook(val rect: Rect, val bounds: Rect, val cut: Rect?)
+
     /** Part of a window's title bar, or of the strip around its edges. */
     private data class Piece(val frame: Frame, val title: Boolean, val rect: Rect) {
         val taskId get() = frame.window.taskId
@@ -596,9 +991,6 @@ class WindowDecor(
     }
 
     private companion object {
-        /** Android 13's own title bar: 32dp buttons with 5dp around them. LumiDeck's covers it exactly. */
-        val CaptionHeight = 42.dp
-
         /** How far out from a window's edges it can be grabbed to resize it. */
         val GripWidth = 6.dp
 
@@ -612,6 +1004,10 @@ class WindowDecor(
         const val SHADOW_ALPHA = 60f
         const val RESIZE_INTERVAL_MS = 50L
         const val SETTLE_MS = 1000L
+        /** How long a window's title bar takes to go from the drag bar back to its own window, in two steps. */
+        const val HANDOVER_MS = 34L
+        /** How long a window can take to draw a change before it's taken as done. */
+        const val DRAWN_MS = 100L
 
         const val LEFT = 1
         const val TOP = 2
@@ -631,5 +1027,31 @@ class WindowDecor(
 
         /** A touch, or a mouse's left button. */
         fun MotionEvent.isPrimary() = getToolType(0) != MotionEvent.TOOL_TYPE_MOUSE || isButtonPressed(MotionEvent.BUTTON_PRIMARY)
+    }
+}
+
+/**
+ * Has Android put the window where it's moved to straight away. Otherwise it slides an app's
+ * overlay window there from where it was, over ~200 ms, when it moves and resizes at once,
+ * as the windows title bars and edges are shown in do when they're given other pieces.
+ * There's no API for it before Android 14, but the flag is written out with the params,
+ * after their width, height, x, y, type and flags, so it's set there and they're read back.
+ */
+private fun LayoutParams.preventMoveAnimation() {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return setCanPlayMoveAnimation(false)
+    val noMoveAnimation = 0x40
+    val parcel = Parcel.obtain()
+    try {
+        writeToParcel(parcel, 0)
+        parcel.setDataPosition(0)
+        if (List(6) { parcel.readInt() } != listOf(width, height, x, y, type, flags)) return
+        val at = parcel.dataPosition()
+        val privateFlags = parcel.readInt()
+        parcel.setDataPosition(at)
+        parcel.writeInt(privateFlags or noMoveAnimation)
+        parcel.setDataPosition(0)
+        copyFrom(LayoutParams(parcel))
+    } finally {
+        parcel.recycle()
     }
 }
