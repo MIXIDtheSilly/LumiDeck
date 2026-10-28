@@ -14,14 +14,23 @@ internal class Options(args: Array<String>) {
     private val values = args.associate { it.substringBefore('=') to it.substringAfter('=', "") }
 
     val width = int("width", 1920)
-    val height = int("height", 1136)
+    /** The desktop's height: what the PC shows. */
+    val height = int("height", 1080)
+    /**
+     * Android draws its own navigation bar along the bottom of the desktop and forces it
+     * on while app windows are open. The display is this much taller, and the strip with
+     * the bar is left out of the video; the desktop keeps it clear, so nothing else is lost.
+     */
+    val navBar = int("nav_bar", 56)
     val dpi = int("dpi", 160)
     /** "hevc" (falls back to H.264 if the device has no HEVC encoder) or "h264". */
     val codec = values["codec"] ?: "hevc"
-    val bitRate = int("bitrate", 40_000_000)
+    val bitRate = int("bitrate", 15_000_000)
     val maxFps = int("max_fps", 0)
     /** The frame rate the encoder is told to expect, which needn't be the real one (see [VideoStream]). */
     val frameRate = int("frame_rate", 30)
+    /** How long the screen stays still before the encoder repeats the last frame (see [VideoStream]). */
+    val repeatAfterMs = int("repeat_after", 100)
     val audio = bool("audio", true)
     val stayAwake = bool("stay_awake", true)
     val stats = bool("stats", false)
@@ -90,9 +99,9 @@ object StreamServer {
             System.err.println("No keyboard: $e")
             null
         }
-        val screen = VirtualScreen(options.width, options.height, options.dpi)
+        val screen = VirtualScreen(options.width, options.height + options.navBar, options.dpi)
         onCleanUp(screen::release)
-        println("Display ${screen.id}: ${options.width}x${options.height}, ${options.dpi} dpi")
+        println("Display ${screen.id}: ${options.width}x${options.height + options.navBar}, ${options.dpi} dpi")
         runCatching(screen::hideIme).onFailure { System.err.println("Couldn't hide the keyboard UI: $it") }
         if (options.stayAwake) stayAwake()
 
@@ -106,13 +115,20 @@ object StreamServer {
             System.err.println("No clipboard: $e")
             null
         }
+        lateinit var capture: PointerCapture
         val stream = VideoStream(screen, options.width, options.height, options, video, onStarted = {
             runCatching { clipboard?.start() }.onFailure { System.err.println("No clipboard: $it") }
+            capture.start()
         })
         val onClipboard: (String) -> Unit = { text ->
             runCatching { clipboard?.setText(text) }.onFailure { System.err.println("Couldn't set the clipboard: $it") }
         }
         val controls = Controls(link.controls, screen.id, keyboard, stream::requestKeyFrame, onClipboard)
+        capture = PointerCapture(screen.id) { captured ->
+            controls.captured = captured
+            val header = ByteBuffer.allocate(12).putLong(VideoStream.POINTER_CAPTURE).putInt(1).flip() as ByteBuffer
+            video.write(header, ByteBuffer.wrap(byteArrayOf(if (captured) 1 else 0)))
+        }
         thread(name = "controls", isDaemon = true) {
             try {
                 controls.run()
@@ -196,7 +212,7 @@ object StreamServer {
     }
 
     @Synchronized
-    private fun onCleanUp(action: () -> Unit) {
+    fun onCleanUp(action: () -> Unit) {
         cleanups += action
     }
 
@@ -209,4 +225,4 @@ object StreamServer {
 }
 
 /** Bumped whenever the client and the server stop understanding each other. */
-internal const val PROTOCOL_VERSION = 3
+internal const val PROTOCOL_VERSION = 4

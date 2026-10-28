@@ -6,7 +6,7 @@
 //! sees AltGr's fake Ctrl for what it is.
 //!
 //! Right Ctrl stays on the PC: it's the client's own shortcut key (Right Ctrl+F for
-//! fullscreen).
+//! fullscreen, and on its own, it lets go of the mouse when a game has it).
 
 use std::sync::Mutex;
 use std::sync::OnceLock;
@@ -27,6 +27,8 @@ use crate::protocol::Control;
 #[derive(Debug)]
 pub enum Shortcut {
     ToggleFullscreen,
+    /// Right Ctrl pressed and let go with nothing else.
+    ReleaseMouse,
 }
 
 struct Hook {
@@ -38,7 +40,8 @@ static HOOK: OnceLock<Hook> = OnceLock::new();
 static WINDOW: AtomicIsize = AtomicIsize::new(0);
 /// Keys sent down, so they can be sent up when the window loses focus.
 static DOWN: Mutex<[bool; 256]> = Mutex::new([false; 256]);
-static RIGHT_CTRL: Mutex<bool> = Mutex::new(false);
+/// Right Ctrl: up (None), or down, and whether another key went with it.
+static RIGHT_CTRL: Mutex<Option<bool>> = Mutex::new(None);
 
 /// Starts listening. Call on the thread that runs the window's event loop.
 pub fn install(window: isize, controls: Sender<Control>, shortcuts: impl Fn(Shortcut) + Send + Sync + 'static) {
@@ -62,7 +65,7 @@ pub fn release_all() {
         *down = [false; 256];
         let _ = hook.controls.send(Control::ReleaseKeys);
     }
-    *RIGHT_CTRL.lock().unwrap() = false;
+    *RIGHT_CTRL.lock().unwrap() = None;
 }
 
 unsafe extern "system" fn hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
@@ -83,16 +86,26 @@ fn handle(event: &KBDLLHOOKSTRUCT) -> bool {
     let vk = event.vkCode as u16;
     let win = vk == VK_LWIN.0 || vk == VK_RWIN.0;
 
+    let mut right_ctrl = RIGHT_CTRL.lock().unwrap();
     if vk == VK_RCONTROL.0 {
-        *RIGHT_CTRL.lock().unwrap() = down;
+        if down {
+            // Held down, it repeats.
+            right_ctrl.get_or_insert(false);
+        } else if right_ctrl.take() == Some(false) {
+            (hook.shortcuts)(Shortcut::ReleaseMouse);
+        }
         return false;
     }
-    if *RIGHT_CTRL.lock().unwrap() {
-        if down && vk == b'F' as u16 {
-            (hook.shortcuts)(Shortcut::ToggleFullscreen);
+    if let Some(used) = right_ctrl.as_mut() {
+        if down {
+            *used = true;
+            if vk == b'F' as u16 {
+                (hook.shortcuts)(Shortcut::ToggleFullscreen);
+            }
         }
         return true;
     }
+    drop(right_ctrl);
     // AltGr presses a fake left Ctrl first, with this scan code.
     if event.scanCode == 0x21D {
         return false;

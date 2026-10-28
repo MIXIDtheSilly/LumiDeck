@@ -7,8 +7,9 @@
 //!    (codec, width, height: three big-endian u32s), then one packet per encoded frame:
 //!    a u64 of flags ([FLAG_CONFIG], [FLAG_KEY_FRAME], [FLAG_COPY]) and the frame's
 //!    time in µs, a u32 size, and the data. A packet with all three flags ([CLIPBOARD]) is
-//!    the device's clipboard text instead, in UTF-8. The other way, the client sends the
-//!    [Control] messages.
+//!    the device's clipboard text instead, in UTF-8, and one with [POINTER_CAPTURE]'s
+//!    flags a byte saying whether an app took the mouse. The other way, the client sends
+//!    the [Control] messages.
 //! 2. **Sound** (only when asked for). [HELLO], the sample rate and channel count (two
 //!    u32s), then chunks of 16-bit little-endian PCM, each after its u32 size.
 //!
@@ -16,7 +17,7 @@
 //! before the server listens, and then closes it: hence the hello.
 
 pub const SOCKET: &str = "localabstract:lumideck";
-pub const HELLO: &[u8; 10] = b"LumiDeck\x00\x03";
+pub const HELLO: &[u8; 10] = b"LumiDeck\x00\x04";
 
 pub const CODEC_H264: u32 = 0x6832_3634;
 pub const CODEC_HEVC: u32 = 0x6832_3635;
@@ -27,6 +28,10 @@ pub const FLAG_KEY_FRAME: u64 = 1 << 62;
 pub const FLAG_COPY: u64 = 1 << 61;
 /// Not a frame: the device's clipboard changed (see clipboard.rs).
 pub const CLIPBOARD: u64 = FLAG_CONFIG | FLAG_KEY_FRAME | FLAG_COPY;
+/// Not a frame: an app on the device took the mouse for itself (1), as games do to turn
+/// the camera with it, or let it go (0). While it has it, the client sends
+/// [Control::MouseRelative] instead of where the pointer is.
+pub const POINTER_CAPTURE: u64 = FLAG_CONFIG | FLAG_COPY;
 
 /// Mouse buttons, as the server numbers them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -73,6 +78,11 @@ pub enum Control {
     Ping,
     /// The PC's clipboard text, for the device's.
     Clipboard(String),
+    /// How far the mouse moved, in the PC's pixels, while an app has it ([POINTER_CAPTURE]).
+    MouseRelative {
+        dx: i32,
+        dy: i32,
+    },
 }
 
 impl Control {
@@ -111,6 +121,11 @@ impl Control {
             Control::ReleaseKeys => out.push(6),
             Control::KeyFrame => out.push(7),
             Control::Ping => out.push(8),
+            Control::MouseRelative { dx, dy } => {
+                out.push(10);
+                out.extend_from_slice(&dx.to_be_bytes());
+                out.extend_from_slice(&dy.to_be_bytes());
+            }
         }
     }
 }

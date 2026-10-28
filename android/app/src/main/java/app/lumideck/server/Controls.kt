@@ -32,6 +32,12 @@ internal class Controls(
     @Volatile var heard = SystemClock.uptimeMillis()
         private set
 
+    /**
+     * Whether an app has taken the mouse ([PointerCapture]). It then gets the mouse's
+     * movements, clicks and wheel as a captured mouse's, and where the pointer is means nothing.
+     */
+    @Volatile var captured = false
+
     fun run() {
         val data = DataInputStream(input.buffered())
         try {
@@ -40,9 +46,10 @@ internal class Controls(
                 heard = SystemClock.uptimeMillis()
                 when (type) {
                     MOUSE_MOVE -> move(data.readInt(), data.readInt())
+                    MOUSE_RELATIVE -> if (captured) mouse(MotionEvent.ACTION_MOVE, dx = data.readInt().toFloat(), dy = data.readInt().toFloat()) else data.skipBytes(8)
                     MOUSE_BUTTON -> button(data.readUnsignedByte(), data.readBoolean(), data.readInt(), data.readInt())
                     MOUSE_SCROLL -> scroll(data.readInt(), data.readInt(), data.readFloat(), data.readFloat())
-                    MOUSE_LEAVE -> if (buttons == 0) mouse(MotionEvent.ACTION_HOVER_EXIT)
+                    MOUSE_LEAVE -> if (buttons == 0 && !captured) mouse(MotionEvent.ACTION_HOVER_EXIT)
                     KEY -> key(data.readUnsignedByte(), data.readBoolean())
                     RELEASE_KEYS -> keys?.releaseAll()
                     KEY_FRAME -> onKeyFrameRequest()
@@ -62,6 +69,7 @@ internal class Controls(
     private fun move(x: Int, y: Int) {
         this.x = x.toFloat()
         this.y = y.toFloat()
+        if (captured) return
         mouse(if (buttons == 0) MotionEvent.ACTION_HOVER_MOVE else MotionEvent.ACTION_MOVE)
     }
 
@@ -107,15 +115,25 @@ internal class Controls(
         keys?.key(usage, down)
     }
 
-    private fun mouse(action: Int, actionButton: Int = 0, horizontal: Float = 0f, vertical: Float = 0f) {
+    /** Plays a mouse event: where the pointer is, or with an app holding the mouse, how far it moved ([dx], [dy]). */
+    private fun mouse(action: Int, actionButton: Int = 0, horizontal: Float = 0f, vertical: Float = 0f, dx: Float = 0f, dy: Float = 0f) {
         val now = SystemClock.uptimeMillis()
+        val relative = captured
         val properties = MotionEvent.PointerProperties().apply {
             id = 0
             toolType = MotionEvent.TOOL_TYPE_MOUSE
         }
         val coords = MotionEvent.PointerCoords().apply {
-            x = this@Controls.x
-            y = this@Controls.y
+            if (relative) {
+                // As a captured mouse reports it: the movement, both as the position and on its own axes.
+                x = dx
+                y = dy
+                setAxisValue(MotionEvent.AXIS_RELATIVE_X, dx)
+                setAxisValue(MotionEvent.AXIS_RELATIVE_Y, dy)
+            } else {
+                x = this@Controls.x
+                y = this@Controls.y
+            }
             pressure = if (buttons != 0) 1f else 0f
             if (horizontal != 0f) setAxisValue(MotionEvent.AXIS_HSCROLL, horizontal)
             if (vertical != 0f) setAxisValue(MotionEvent.AXIS_VSCROLL, vertical)
@@ -133,7 +151,7 @@ internal class Controls(
             1f,
             0,
             0,
-            InputDevice.SOURCE_MOUSE,
+            if (relative) InputDevice.SOURCE_MOUSE_RELATIVE else InputDevice.SOURCE_MOUSE,
             0,
         )
         if (actionButton != 0) injector.setActionButton(event, actionButton)
@@ -152,6 +170,7 @@ internal class Controls(
         const val KEY_FRAME = 7
         const val PING = 8
         const val CLIPBOARD = 9
+        const val MOUSE_RELATIVE = 10
 
         const val BUTTON_PRIMARY = 1
         const val BUTTON_SECONDARY = 2

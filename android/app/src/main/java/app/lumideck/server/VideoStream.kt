@@ -96,8 +96,10 @@ internal class VirtualScreen(width: Int, height: Int, dpi: Int) {
  * change the pairing: operating rate, low latency, bit rate mode, scene mode.
  *
  * When the screen stops changing, the encoder repeats the last frame after
- * [REPEAT_AFTER_US], in better quality each time. With pairs, the first repeat also gets
- * the last frame out. It goes to the PC as a copy, decoded but not shown.
+ * [Options.repeatAfterMs], in better quality each time. With pairs, the first repeat also
+ * gets the last frame out. It goes to the PC as a copy, decoded but not shown. The delay
+ * is longer than a slow game's frame: a repeat between two frames keeps the encoder busy
+ * when the next one comes, which made a 30–40 fps game's frames ~12 ms later.
  */
 internal class VideoStream(
     private val screen: VirtualScreen,
@@ -126,6 +128,9 @@ internal class VideoStream(
         this.codec = codec
         writeHeader(codecId)
         onStarted()
+        // The screen is taller than the video by the navigation bar (Options.navBar).
+        // SurfaceFlinger draws it into the encoder's frames from the top without scaling,
+        // so the bar falls off the bottom.
         val surface = codec.createInputSurface()
         screen.setSurface(surface)
         codec.start()
@@ -142,7 +147,7 @@ internal class VideoStream(
                 if (config) ptsFlags = ptsFlags or FLAG_CONFIG
                 if (key) ptsFlags = ptsFlags or FLAG_KEY_FRAME
                 // A repeat carries the time stamp of the frame it repeats, plus the delay.
-                val copy = !config && repeating && info.presentationTimeUs == shownPts + REPEAT_AFTER_US
+                val copy = !config && repeating && info.presentationTimeUs == shownPts + repeatAfterUs
                 if (copy) ptsFlags = ptsFlags or FLAG_COPY else if (!config) shownPts = info.presentationTimeUs
                 header.clear()
                 header.putLong(ptsFlags).putInt(info.size).flip()
@@ -182,6 +187,7 @@ internal class VideoStream(
     }
 
     private val repeating get() = "repeat" in options.tune
+    private val repeatAfterUs get() = options.repeatAfterMs * 1000L
 
     private fun format(mime: String) = MediaFormat.createVideoFormat(mime, width, height).apply {
         setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatSurface)
@@ -192,7 +198,7 @@ internal class VideoStream(
         val tune = options.tune
         // Sends the last frame again when the screen stops changing: the first repeat gets it
         // out of the encoder, the next ones let its quality catch up.
-        if (repeating) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, REPEAT_AFTER_US)
+        if (repeating) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, repeatAfterUs)
         if ("priority" in tune) setInteger(MediaFormat.KEY_PRIORITY, 0)
         if ("latency" in tune) setInteger(KEY_LATENCY, 0)
         if ("bframes" in tune) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
@@ -264,11 +270,8 @@ internal class VideoStream(
         const val FLAG_COPY = 1L shl 61
         /** All three flags: not a frame but the device's clipboard text (see [ClipboardSync]). */
         const val CLIPBOARD = FLAG_CONFIG or FLAG_KEY_FRAME or FLAG_COPY
-        /**
-         * Longer than a frame's time, so that the encoder only repeats a frame when the
-         * screen stopped changing, not between frames.
-         */
-        private const val REPEAT_AFTER_US = 20_000L
+        /** Not a frame: one byte, 1 if an app took the mouse ([PointerCapture]), 0 when it lets go. */
+        const val POINTER_CAPTURE = FLAG_CONFIG or FLAG_COPY
         private const val PACKET_HEADER = 12
         private const val KEY_LATENCY = "latency"
         private const val KEY_MAX_FPS_TO_ENCODER = "max-fps-to-encoder"

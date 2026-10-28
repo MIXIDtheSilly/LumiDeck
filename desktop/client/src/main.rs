@@ -26,11 +26,11 @@ use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
 use winit::application::ApplicationHandler;
-use winit::dpi::PhysicalSize;
+use winit::dpi::{PhysicalPosition, PhysicalSize};
 use winit::event::{ElementState, MouseButton, MouseScrollDelta, WindowEvent};
-use winit::event_loop::{ActiveEventLoop, EventLoop, EventLoopProxy};
+use winit::event_loop::{ActiveEventLoop, DeviceEvents, EventLoop, EventLoopProxy};
 use winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
-use winit::window::{Fullscreen, Icon, Window, WindowId};
+use winit::window::{CursorGrabMode, CursorIcon, CustomCursor, Fullscreen, Icon, Window, WindowId};
 
 use crate::adb::Adb;
 use crate::keyboard::Shortcut;
@@ -48,11 +48,12 @@ Usage: lumideck [options]
   --dpi <n>             Its density: 160 is one pixel per dp (default 160)
   --fullscreen          Start fullscreen (Right Ctrl+F toggles it)
   --codec <hevc|h264>   Video codec (default hevc, which the device may not have)
-  --bitrate <Mbit/s>    Video bit rate (default 40)
+  --bitrate <Mbit/s>    Video bit rate (default 15)
   --no-audio            Leave the sound on the device
   --link <auto|usb|adb> Straight over USB, or through ADB (default auto: USB once it's
                         set up)
   --setup-usb           Set the PC up for the USB link, once (needs an administrator)
+  --usb-ready           Exit with 0 if the PC is set up for the USB link, 1 if not
   --stats               Print how fast video goes, every few seconds
   --dump-video <file>   Save the video stream as it arrives, to look into problems
 ";
@@ -75,6 +76,7 @@ struct Args {
     audio: bool,
     link: Link,
     setup_usb: bool,
+    usb_ready: bool,
     stats: bool,
     dump: Option<std::path::PathBuf>,
 }
@@ -88,10 +90,11 @@ impl Args {
             dpi: 160,
             fullscreen: false,
             codec: "hevc".into(),
-            bitrate: 40,
+            bitrate: 15,
             audio: true,
             link: Link::Auto,
             setup_usb: false,
+            usb_ready: false,
             stats: false,
             dump: None,
         };
@@ -120,6 +123,7 @@ impl Args {
                     }
                 }
                 "--setup-usb" => args.setup_usb = true,
+                "--usb-ready" => args.usb_ready = true,
                 "--stats" => args.stats = true,
                 "--dump-video" => args.dump = Some(value()?.into()),
                 "--help" | "-h" => {
@@ -138,6 +142,8 @@ impl Args {
 
 enum UserEvent {
     Shortcut(Shortcut),
+    /// An app on the device took the mouse for itself, or let it go (see protocol::POINTER_CAPTURE).
+    PointerCapture(bool),
     /// The session ended, with why if it wasn't the user.
     Ended(Option<String>),
 }
@@ -154,6 +160,9 @@ fn main() -> ExitCode {
 
 fn run() -> Result<()> {
     let args = Args::parse()?;
+    if args.usb_ready {
+        std::process::exit(if usb_setup::done() { 0 } else { 1 });
+    }
     // Waits as short as a millisecond, for spacing out the frames (see video::due).
     unsafe { windows::Win32::Media::timeBeginPeriod(1) };
     let adb = Adb::connect(args.serial.clone())?;
@@ -163,13 +172,14 @@ fn run() -> Result<()> {
     adb.prepare()?;
 
     // Android draws its own navigation bar along the bottom of the desktop and forces it
-    // on while app windows are open. The display is one bar taller and the bar is cropped
-    // off on this side; the desktop keeps that strip clear, so nothing else is lost. The
-    // bar is 56dp on displays this large.
+    // on while app windows are open. The display is one bar taller and the device leaves
+    // the bar out of the video; the desktop keeps that strip clear, so nothing else is
+    // lost. The bar is 56dp on displays this large.
     let nav_bar = (56 * args.dpi).div_ceil(160) & !1;
     let options = vec![
         format!("width={}", args.width),
-        format!("height={}", args.height + nav_bar),
+        format!("height={}", args.height),
+        format!("nav_bar={nav_bar}"),
         format!("dpi={}", args.dpi),
         format!("codec={}", args.codec),
         format!("bitrate={}", args.bitrate * 1_000_000),
@@ -196,6 +206,7 @@ fn run() -> Result<()> {
             (server, Box::new(video) as Box<dyn Read + Send>, sound, controls)
         }
     };
+    adb.start_helper()?;
     let header = Header::read(&mut video)?;
 
     let (controls, control_queue) = mpsc::channel();
@@ -205,19 +216,31 @@ fn run() -> Result<()> {
     server.on_stop(move |why| {
         let _ = stopped.send(video::Event::Closed(std::io::Error::other(why)));
     });
+    let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
+    // winit reads the keyboard as raw input while the window has focus, and Windows then
+    // stops calling the keyboard hook (keyboard.rs) for keys meant for it: no keys at all.
+    event_loop.listen_device_events(DeviceEvents::Never);
+
     let clipboard = clipboard::spawn(controls.clone())
         .inspect_err(|e| eprintln!("No clipboard: {e:#}"))
         .ok();
-    video::spawn_reader(video, video_events.clone(), move |text| {
-        if let Some(clipboard) = &clipboard {
-            clipboard.set(text);
-        }
-    });
+    let proxy = event_loop.create_proxy();
+    video::spawn_reader(
+        video,
+        video_events.clone(),
+        move |text| {
+            if let Some(clipboard) = &clipboard {
+                clipboard.set(text);
+            }
+        },
+        move |captured| {
+            let _ = proxy.send_event(UserEvent::PointerCapture(captured));
+        },
+    );
     if let Some(sound) = sound {
         audio::spawn(sound);
     }
 
-    let event_loop = EventLoop::<UserEvent>::with_user_event().build()?;
     let mut app = App {
         args,
         header: Some(header),
@@ -228,6 +251,9 @@ fn run() -> Result<()> {
         window: None,
         size: Arc::new(WindowSize::default()),
         cursor: (0.0, 0.0),
+        captured: false,
+        grabbed: false,
+        blank_cursor: None,
         result: Ok(()),
     };
     event_loop.run_app(&mut app)?;
@@ -256,7 +282,8 @@ fn start_usb(adb: &Adb, options: &[String], audio: bool) -> Result<Streams> {
 const PING_EVERY: Duration = Duration::from_secs(1);
 
 /// Sends the controls on their own thread, so the window never waits on the connection.
-/// Pointer moves queued behind one another go as just the last.
+/// Pointer moves queued behind one another go as just the last, and a game's mouse
+/// movements ([Control::MouseRelative]) as their sum.
 fn spawn_control_writer(mut stream: impl Write + Send + 'static, queue: Receiver<Control>) {
     thread::Builder::new()
         .name("controls".into())
@@ -270,7 +297,16 @@ fn spawn_control_writer(mut stream: impl Write + Send + 'static, queue: Receiver
                 };
                 let batch: Vec<Control> = std::iter::once(first).chain(queue.try_iter()).collect();
                 buffer.clear();
+                let mut moved = (0, 0);
                 for (i, control) in batch.iter().enumerate() {
+                    if let Control::MouseRelative { dx, dy } = *control {
+                        moved = (moved.0 + dx, moved.1 + dy);
+                        if !matches!(batch.get(i + 1), Some(Control::MouseRelative { .. })) {
+                            Control::MouseRelative { dx: moved.0, dy: moved.1 }.encode(&mut buffer);
+                            moved = (0, 0);
+                        }
+                        continue;
+                    }
                     let superseded = matches!(control, Control::MouseMove { .. })
                         && matches!(batch.get(i + 1), Some(Control::MouseMove { .. }));
                     if !superseded {
@@ -295,6 +331,12 @@ struct App {
     window: Option<Window>,
     size: Arc<WindowSize>,
     cursor: (f64, f64),
+    /// An app on the device has the mouse (a game turning its camera with it).
+    captured: bool,
+    /// The PC's mouse is held for it: hidden, kept in the window, and its movements sent on.
+    grabbed: bool,
+    /// A pointer with nothing to see, for while the mouse is held.
+    blank_cursor: Option<CustomCursor>,
     result: Result<()>,
 }
 
@@ -316,6 +358,46 @@ impl App {
         let _ = self.controls.send(control);
     }
 
+    /// Holds the mouse for the app that has the device's. Windows can only keep it in the
+    /// window, not still, so it goes back to the middle after every move, and how far it
+    /// went goes to the device.
+    fn grab(&mut self) {
+        let (Some(window), Some(blank)) = (&self.window, &self.blank_cursor) else { return };
+        if window.set_cursor_grab(CursorGrabMode::Confined).is_err() {
+            return;
+        }
+        // Not hidden: winit keeps a hidden one to a single pixel, to be read as raw input,
+        // which is off (see run). An invisible one keeps the whole window to move in.
+        window.set_cursor(blank.clone());
+        self.grabbed = true;
+        self.recenter();
+    }
+
+    /// Lets go of the mouse: Right Ctrl, the window losing focus, or the app letting go.
+    fn release(&mut self) {
+        if !self.grabbed {
+            return;
+        }
+        self.grabbed = false;
+        if let Some(window) = &self.window {
+            let _ = window.set_cursor_grab(CursorGrabMode::None);
+            window.set_cursor(CursorIcon::Default);
+        }
+    }
+
+    fn middle(&self) -> PhysicalPosition<f64> {
+        let (width, height) = self.size.get();
+        PhysicalPosition::new((width / 2) as f64, (height / 2) as f64)
+    }
+
+    fn recenter(&mut self) {
+        let middle = self.middle();
+        if let Some(window) = &self.window {
+            let _ = window.set_cursor_position(middle);
+        }
+        self.cursor = (middle.x, middle.y);
+    }
+
     fn create_window(&mut self, event_loop: &ActiveEventLoop) -> Result<()> {
         let content = self.content();
         // As large as the desktop, or as fits on the screen.
@@ -334,6 +416,9 @@ impl App {
             attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }
         let window = event_loop.create_window(attributes)?;
+        self.blank_cursor = CustomCursor::from_rgba(vec![0; 4], 1, 1, 0, 0)
+            .map(|source| event_loop.create_custom_cursor(source))
+            .ok();
         let inner = window.inner_size();
         self.size.set(inner.width, inner.height);
         let hwnd = match window.window_handle()?.as_raw() {
@@ -386,13 +471,33 @@ impl ApplicationHandler<UserEvent> for App {
             WindowEvent::RedrawRequested => {
                 let _ = self.video_events.send(video::Event::Redraw);
             }
-            WindowEvent::Focused(false) => keyboard::release_all(),
+            WindowEvent::Focused(false) => {
+                keyboard::release_all();
+                self.release();
+            }
             WindowEvent::CursorMoved { position, .. } => {
+                if self.grabbed {
+                    let middle = self.middle();
+                    let (dx, dy) = ((position.x - middle.x).round() as i32, (position.y - middle.y).round() as i32);
+                    // Going back to the middle comes through here too, as no move.
+                    if dx != 0 || dy != 0 {
+                        self.send(Control::MouseRelative { dx, dy });
+                        self.recenter();
+                    }
+                    return;
+                }
                 self.cursor = (position.x, position.y);
                 let (x, y) = self.device_point();
                 self.send(Control::MouseMove { x, y });
             }
             WindowEvent::CursorLeft { .. } => self.send(Control::MouseLeave),
+            // A click in the window takes the mouse back for the app that has the device's,
+            // as in a game on the PC.
+            WindowEvent::MouseInput { state: ElementState::Pressed, button: MouseButton::Left, .. }
+                if self.captured && !self.grabbed =>
+            {
+                self.grab()
+            }
             WindowEvent::MouseInput { state, button, .. } => {
                 let button = match button {
                     MouseButton::Left => Button::Primary,
@@ -424,6 +529,15 @@ impl ApplicationHandler<UserEvent> for App {
                 if let Some(window) = &self.window {
                     let fullscreen = window.fullscreen().is_some();
                     window.set_fullscreen(if fullscreen { None } else { Some(Fullscreen::Borderless(None)) });
+                }
+            }
+            UserEvent::Shortcut(Shortcut::ReleaseMouse) => self.release(),
+            UserEvent::PointerCapture(captured) => {
+                self.captured = captured;
+                if !captured {
+                    self.release();
+                } else if self.window.as_ref().is_some_and(Window::has_focus) {
+                    self.grab();
                 }
             }
             UserEvent::Ended(error) => {

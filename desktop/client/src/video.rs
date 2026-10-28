@@ -13,7 +13,9 @@ use anyhow::{Result, bail};
 use windows::Win32::Foundation::HWND;
 
 use crate::decoder::{Decoder, Frame};
-use crate::protocol::{CLIPBOARD, CODEC_H264, CODEC_HEVC, Control, FLAG_CONFIG, FLAG_COPY, FLAG_KEY_FRAME};
+use crate::protocol::{
+    CLIPBOARD, CODEC_H264, CODEC_HEVC, Control, FLAG_CONFIG, FLAG_COPY, FLAG_KEY_FRAME, POINTER_CAPTURE,
+};
 use crate::render::Renderer;
 
 pub struct Header {
@@ -61,12 +63,13 @@ impl WindowSize {
     }
 }
 
-/// Reads the video off `stream` into `events`, and passes the device's clipboard text,
-/// which comes with it, to `on_clipboard`.
+/// Reads the video off `stream` into `events`, and passes what comes with it on: the
+/// device's clipboard text to `on_clipboard`, and whether an app has the mouse to `on_capture`.
 pub fn spawn_reader(
     mut stream: impl Read + Send + 'static,
     events: Sender<Event>,
     on_clipboard: impl Fn(String) + Send + 'static,
+    on_capture: impl Fn(bool) + Send + 'static,
 ) {
     thread::Builder::new()
         .name("video in".into())
@@ -86,6 +89,10 @@ pub fn spawn_reader(
                     on_clipboard(String::from_utf8_lossy(&data).into_owned());
                     continue;
                 }
+                if flags == POINTER_CAPTURE {
+                    on_capture(data.first() == Some(&1));
+                    continue;
+                }
                 if events.send(Event::Packet { flags, data }).is_err() {
                     return;
                 }
@@ -98,7 +105,7 @@ pub fn spawn_reader(
 pub struct Options {
     pub hwnd: isize,
     pub header: Header,
-    /// The part of the frame that shows: the device draws its navigation bar below it.
+    /// The part of the frame that shows, should the device send more than the desktop.
     pub crop: (u32, u32),
     pub stats: bool,
     /// Where to save the video as it arrives, for looking into problems.

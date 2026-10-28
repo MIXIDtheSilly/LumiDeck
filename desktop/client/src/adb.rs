@@ -86,7 +86,6 @@ impl Adb {
 
     /// What lumideck.ps1 used to do before each session.
     pub fn prepare(&self) -> Result<()> {
-        let apk = self.apk()?;
         // Some firmware (seen on the Anbernic RG556) keeps LumiDeck as the home role holder
         // after a reboot but stops resolving it as home, so the desktop would come up as the
         // stock launcher. Adding the role again fixes it; skipped if the user picked another.
@@ -107,8 +106,21 @@ impl Adb {
             "appops set {PACKAGE} SYSTEM_ALERT_WINDOW allow; appops set {PACKAGE} WRITE_SETTINGS allow; \
              cmd notification allow_dnd {PACKAGE}; pm grant {PACKAGE} android.permission.BLUETOOTH_CONNECT 2>/dev/null; true"
         ))?;
-        // The window helper, for the taskbar's running apps and the title bars. It keeps
-        // running after the PC goes; starting it again replaces the old one.
+        // Apps stop drawing Android's own title bars on their windows, and LumiDeck puts its
+        // own above them instead of over Android's. Apps only follow it from the next restart.
+        if self.shell("getprop persist.debug.caption_on_shell")?.trim() != "true" {
+            self.shell("setprop persist.debug.caption_on_shell true")?;
+            println!("Restart the device once to give app windows LumiDeck's title bars only");
+        }
+        Ok(())
+    }
+
+    /// Starts the window helper, for the taskbar's running apps and the title bars. It
+    /// keeps running after the PC goes; starting it again replaces the old one. Call it
+    /// after switching the USB over (usb::switch): the device restarts ADB for that, and
+    /// Android then stops everything ADB started, the helper too.
+    pub fn start_helper(&self) -> Result<()> {
+        let apk = self.apk()?;
         self.shell(&format!("CLASSPATH={apk} nohup app_process / {PACKAGE}.helper.WindowHelper >/dev/null 2>&1 &"))?;
         Ok(())
     }

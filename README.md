@@ -66,7 +66,7 @@ To use a monitor instead, do steps 1–3, then plug the device into the monitor 
 - Windows get LumiDeck's own title bar: drag it to move the window, double-click it to maximise, and drag a maximised window to restore its size. Drag a window's edges or corners to resize it. Android's own title bar can't move windows on these screens, so LumiDeck covers it; this needs the window helper and "Display over other apps".
 - The taskbar floats, and attaches to the bottom edge while a window reaches down to it, as on Plasma.
 - **Desktop Settings**, in the app menu or the taskbar's right-click menu, sets the wallpaper (a colour or your own picture), the taskbar's size, whether it floats, the clock format and the order of pinned apps.
-- In the PC window, the Windows key goes to the device (it opens the app menu), and **Right Ctrl** is the client's own: Right Ctrl+F toggles fullscreen. Pick the keyboard layout under Android's **Settings → System → Languages & input → Physical keyboard → LumiDeck keyboard**.
+- In the PC window, the Windows key goes to the device (it opens the app menu), and **Right Ctrl** is the client's own: Right Ctrl+F toggles fullscreen. When a game takes the mouse (to turn its camera, as Minecraft does), the window holds the PC's mouse for it; tap Right Ctrl to let go, and click the window to give it back. Pick the keyboard layout under Android's **Settings → System → Languages & input → Physical keyboard → LumiDeck keyboard**.
 
 ## Repo layout
 
