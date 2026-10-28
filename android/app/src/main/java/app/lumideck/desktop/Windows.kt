@@ -6,6 +6,7 @@ import android.content.ComponentName
 import android.content.Intent
 import android.content.pm.LauncherApps
 import android.graphics.Rect
+import android.os.Process
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
@@ -37,12 +38,24 @@ class Windows(private val activity: Activity) {
 
     val displayId: Int get() = ContextCompat.getDisplayOrDefault(activity).displayId
 
+    /**
+     * Opens [app]'s window, through the window helper while it runs: Android slides new
+     * windows in from the side of the screen, and only the helper may open them without.
+     */
     fun launch(app: AppEntry) {
-        if (app.component.packageName == activity.packageName) {
-            // LauncherApps only starts activities listed in the app drawer.
-            launchOwn(app.component)
-        } else {
-            activity.getSystemService(LauncherApps::class.java)
+        when {
+            // LauncherApps only starts activities listed in the app drawer, and the helper
+            // can't start LumiDeck's, which other apps can't.
+            app.component.packageName == activity.packageName -> launchOwn(app.component)
+            HelperLink.running -> HelperLink.launch(
+                Intent(Intent.ACTION_MAIN)
+                    .addCategory(Intent.CATEGORY_LAUNCHER)
+                    .setComponent(app.component)
+                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_RESET_TASK_IF_NEEDED),
+                launchOptions(),
+                app.user,
+            )
+            else -> activity.getSystemService(LauncherApps::class.java)
                 .startMainActivity(app.component, app.user, null, launchOptions())
         }
     }
@@ -51,8 +64,10 @@ class Windows(private val activity: Activity) {
 
     /** Opens one of Android's settings screens, such as [android.provider.Settings.ACTION_SETTINGS], as a window. */
     fun openSystemSettings(action: String) {
+        val intent = Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        if (HelperLink.running) return HelperLink.launch(intent, launchOptions(), Process.myUserHandle())
         // Not every firmware has every screen.
-        runCatching { activity.startActivity(Intent(action).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK), launchOptions()) }
+        runCatching { activity.startActivity(intent, launchOptions()) }
     }
 
     private fun launchOwn(component: ComponentName) =

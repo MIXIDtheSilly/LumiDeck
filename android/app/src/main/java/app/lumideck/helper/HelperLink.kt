@@ -1,9 +1,12 @@
 package app.lumideck.helper
 
+import android.content.Intent
 import android.graphics.Rect
 import android.os.Binder
+import android.os.Bundle
 import android.os.IBinder
 import android.os.RemoteException
+import android.os.UserHandle
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 
@@ -42,6 +45,7 @@ object HelperLink {
         return listener
     }
 
+    fun launch(intent: Intent, options: Bundle, user: UserHandle) = call { it.launch(intent, options, user) }
     fun focus(taskId: Int) = call { it.focus(taskId) }
     fun minimize(taskId: Int) = call { it.minimize(taskId) }
     fun resize(taskId: Int, bounds: Rect) = call { it.resize(taskId, bounds) }

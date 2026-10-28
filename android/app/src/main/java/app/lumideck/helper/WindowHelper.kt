@@ -1,6 +1,7 @@
 package app.lumideck.helper
 
 import android.app.ActivityManager
+import android.content.Intent
 import android.graphics.Rect
 import android.os.Binder
 import android.os.Bundle
@@ -9,6 +10,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.os.Parcel
 import android.os.SystemClock
+import android.os.UserHandle
 import android.util.Log
 import android.view.Display
 import app.lumideck.SettingsActivity
@@ -38,6 +40,12 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
     private var refreshAt = Long.MAX_VALUE
     /** When LumiDeck last moved or resized a window, in [SystemClock.uptimeMillis] time. */
     @Volatile private var resizedAt = 0L
+
+    override fun launch(intent: Intent, options: Bundle, user: UserHandle) = command {
+        val result = tasks.start(intent, options, user)
+        // Below 0 is an error, such as nothing to open it with.
+        if (result < 0) Log.w(TAG, "Couldn't open $intent: $result")
+    }
 
     override fun focus(taskId: Int) = command { tasks.moveToFront(taskId) }
 
@@ -240,10 +248,58 @@ private class Tasks {
         return layers
     }
 
+    /**
+     * [options] (ActivityOptions) with no animation. Android slides windows in from the side
+     * of the screen as they open or come to the front, and off it as they close, which suits
+     * apps filling a phone's screen. Only callers that may start tasks from recents, as the
+     * shell may, can turn it off.
+     */
+    private fun instant(options: Bundle = Bundle()) = Bundle(options).apply {
+        // What ActivityOptions.makeCustomTaskAnimation, which isn't in the SDK, adds, with
+        // no animations to load.
+        putInt("android:activity.animType", ANIM_CUSTOM)
+        putString("android:activity.packageName", LUMIDECK)
+        putInt("android:activity.animEnterRes", 0)
+        putInt("android:activity.animExitRes", 0)
+        putBoolean("android:activity.overrideTaskTransition", true)
+    }
+
+    /** Opens a window with no animation ([instant]), returning Android's result code. */
+    fun start(intent: Intent, options: Bundle, user: UserHandle): Int {
+        val instant = instant(options)
+        val userId = UserHandle::class.java.getMethod("getIdentifier").invoke(user) as Int
+        // The app's window may be showing on another display, as on the device's own screen,
+        // where Android puts the windows when a PC session ends, filling it. It's moved over,
+        // and Android grows a window going from filling its screen to freeform, or back, from
+        // where it was into its new place, whatever the options say. So it's made freeform
+        // first, there, where it doesn't show on the PC. (Hiding it instead has the app draw
+        // again as it comes over, grey until it does.)
+        val displayId = options.getInt(KEY_LAUNCH_DISPLAY_ID, Display.INVALID_DISPLAY)
+        val app = intent.component?.packageName
+        if (app != null) {
+            running()
+                .filter { task ->
+                    (task.baseIntent.component ?: task.baseActivity)?.packageName == app &&
+                        task.hidden<Int>("userId") == userId &&
+                        task.hidden<Int>("displayId") != displayId &&
+                        task.hidden<Boolean>("isVisible") == true
+                }
+                .forEach(::makeFreeform)
+        }
+        val start = method("startActivityAsUser")
+        // Android 11 added the caller's feature id after its package.
+        val result = if (start.parameterCount == 12) {
+            start.invoke(atm, null, SHELL_PACKAGE, null, intent, null, null, null, 0, 0, null, instant, userId)
+        } else {
+            start.invoke(atm, null, SHELL_PACKAGE, intent, null, null, null, 0, 0, null, instant, userId)
+        }
+        return result as Int
+    }
+
     fun moveToFront(taskId: Int) {
         val move = method("moveTaskToFront")
         if (move.parameterCount == 5) {
-            move.invoke(atm, null, SHELL_PACKAGE, taskId, 0, null)
+            move.invoke(atm, null, SHELL_PACKAGE, taskId, 0, instant())
         } else {
             move.invoke(atm, taskId, 0, null)
         }
@@ -267,13 +323,17 @@ private class Tasks {
         val task = running().firstOrNull { it.taskId == taskId } ?: return
         val window = task.windowConfiguration() ?: return
         if (window.javaClass.getMethod("getDisplayWindowingMode").invoke(window) != WINDOWING_MODE_FREEFORM) return
+        makeFreeform(task)
+        // Android gives it bounds of its own as it changes mode, so it moves once it's freeform.
+        resizeTask.invoke(atm, taskId, bounds, RESIZE_MODE_SYSTEM)
+    }
+
+    private fun makeFreeform(task: ActivityManager.RunningTaskInfo) {
         val token = task.hidden<Any>("token") ?: return
         transact { change, tokenClass ->
             change.javaClass.getMethod("setWindowingMode", tokenClass, Int::class.javaPrimitiveType)
                 .invoke(change, token, WINDOWING_MODE_FREEFORM)
         }
-        // Android gives it bounds of its own as it changes mode, so it moves once it's freeform.
-        resizeTask.invoke(atm, taskId, bounds, RESIZE_MODE_SYSTEM)
     }
 
     /** Applies a WindowContainerTransaction that [build] fills in, given it and the token class. */
@@ -284,7 +344,9 @@ private class Tasks {
         organizer.javaClass.methods.first { it.name == "applyTransaction" && it.parameterCount == 1 }.invoke(organizer, change)
     }
 
+    /** Closes a window, from behind the desktop: closing has an animation too, which can't be turned off. */
     fun remove(taskId: Int) {
+        moveToBack(taskId)
         method("removeTask").invoke(atm, taskId)
     }
 
@@ -358,5 +420,7 @@ private class Tasks {
         const val RESIZE_MODE_SYSTEM = 0
         const val ACTIVITY_TYPE_STANDARD = 1
         const val WINDOWING_MODE_FREEFORM = 5
+        const val ANIM_CUSTOM = 1
+        const val KEY_LAUNCH_DISPLAY_ID = "android.activity.launchDisplayId"
     }
 }
