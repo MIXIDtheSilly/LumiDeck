@@ -111,6 +111,7 @@ object StreamServer {
         println("Display ${screen.id}: ${options.width}x${options.height + options.navBar}, ${options.dpi} dpi")
         runCatching(screen::hideIme).onFailure { System.err.println("Couldn't hide the keyboard UI: $it") }
         if (options.stayAwake) stayAwake()
+        if (!options.windowAnimations) stopWindowAnimations()
 
         val video = link.video.shared()
         val clipboard = try {
@@ -203,13 +204,27 @@ object StreamServer {
 
     /** Keeps the device awake while it's plugged in, as it would sleep and blank the display. */
     private fun stayAwake() {
-        val setting = "stay_on_while_plugged_in"
-        val before = shell("settings", "get", "global", setting).trim()
         // Any power source: AC, USB and wireless.
-        if (before == "7") return
-        shell("settings", "put", "global", setting, "7")
+        setGlobal("stay_on_while_plugged_in", "7")
+    }
+
+    /**
+     * Turns off Android's window animations: it slides windows in from the side of the
+     * screen as they open, which suits apps filling a phone's screen. The window helper
+     * opens them without, but not windows apps open themselves, nor LumiDeck's own.
+     */
+    private fun stopWindowAnimations() {
+        setGlobal("window_animation_scale", "0")
+        setGlobal("transition_animation_scale", "0")
+    }
+
+    /** Sets a global setting until this server stops, then puts back what it was. */
+    private fun setGlobal(setting: String, value: String) {
+        val before = shell("settings", "get", "global", setting).trim()
+        if (before == value) return
+        shell("settings", "put", "global", setting, value)
         onCleanUp {
-            if (before.toIntOrNull() != null) shell("settings", "put", "global", setting, before)
+            if (before == "null") shell("settings", "delete", "global", setting) else shell("settings", "put", "global", setting, before)
         }
     }
 
