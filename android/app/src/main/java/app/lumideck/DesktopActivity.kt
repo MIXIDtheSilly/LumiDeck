@@ -27,6 +27,7 @@ import app.lumideck.desktop.Snap
 import app.lumideck.desktop.SwitcherState
 import app.lumideck.desktop.TaskbarLayer
 import app.lumideck.desktop.TaskbarOverlay
+import app.lumideck.desktop.TouchpadOverlay
 import app.lumideck.desktop.WindowDecor
 import app.lumideck.desktop.Windows
 import app.lumideck.helper.HelperLink
@@ -46,6 +47,7 @@ class DesktopActivity : ComponentActivity() {
     private var lastMetaTap = 0L
     private val onShortcut: (String) -> Unit = ::onShortcut
     private var shortcutDisplay = -1
+    private val touchpad = TouchpadOverlay(this, onShortcut)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         // Android gives every desktop-mode display its own navigation bar. The desktop hides
@@ -101,9 +103,12 @@ class DesktopActivity : ComponentActivity() {
         )
         // Title bars need the overlay too; without it, windows keep Android's own.
         if (overlayShown.value) decor.start()
+        // On a monitor plugged into the device, its own screen becomes a touchpad.
+        if (TouchpadOverlay.isMonitor(this, windows.displayId)) touchpad.show()
     }
 
     override fun onDestroy() {
+        touchpad.hide()
         Shortcuts.unregister(shortcutDisplay, onShortcut)
         decor.stop()
         overlay.hide()

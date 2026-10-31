@@ -14,6 +14,8 @@ import android.os.UserHandle
 import android.util.Log
 import android.view.Display
 import app.lumideck.SettingsActivity
+import app.lumideck.server.HidKeyboard
+import app.lumideck.server.HidMouse
 import kotlin.concurrent.thread
 import kotlin.system.exitProcess
 
@@ -61,6 +63,25 @@ class WindowHelper private constructor() : IWindowHelper.Stub() {
     override fun setWifi(on: Boolean) = shell("cmd", "wifi", "set-wifi-enabled", if (on) "enabled" else "disabled")
 
     override fun setBluetooth(on: Boolean) = shell("svc", "bluetooth", if (on) "enable" else "disable")
+
+    /** Made on first use: only the touchpad needs them. */
+    private val mouse by lazy { HidMouse() }
+    private val keyboard by lazy { HidKeyboard() }
+
+    override fun mouse(dx: Int, dy: Int, buttons: Int, wheel: Int, hWheel: Int) = input {
+        mouse.send(dx, dy, buttons, wheel, hWheel)
+    }
+
+    override fun key(usage: Int, down: Boolean) = input { keyboard.key(usage, down) }
+
+    private fun input(action: () -> Unit) {
+        checkCaller()
+        try {
+            action()
+        } catch (e: Exception) {
+            Log.w(TAG, "Input failed", e)
+        }
+    }
 
     override fun exit() {
         checkCaller()

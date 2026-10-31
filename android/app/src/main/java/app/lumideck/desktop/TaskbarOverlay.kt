@@ -251,20 +251,21 @@ class TaskbarOverlay(
             return metaTap.onKey(event) || super.dispatchKeyEvent(event)
         }
     }
+}
 
-    /**
-     * Compose stops drawing when its lifecycle stops, and the desktop activity stops as
-     * soon as an app covers it. The taskbar has to keep running, so it gets its own.
-     */
-    private class AlwaysResumed : LifecycleOwner, SavedStateRegistryOwner {
-        private val registry = LifecycleRegistry(this)
-        private val savedState = SavedStateRegistryController.create(this)
-        override val lifecycle: Lifecycle get() = registry
-        override val savedStateRegistry get() = savedState.savedStateRegistry
+/**
+ * Compose stops drawing when its lifecycle stops, and the desktop activity stops as soon
+ * as an app covers it. The taskbar (and the handheld's touchpad) have to keep running, so
+ * they get their own.
+ */
+internal class AlwaysResumed : LifecycleOwner, SavedStateRegistryOwner {
+    private val registry = LifecycleRegistry(this)
+    private val savedState = SavedStateRegistryController.create(this)
+    override val lifecycle: Lifecycle get() = registry
+    override val savedStateRegistry get() = savedState.savedStateRegistry
 
-        init {
-            savedState.performRestore(null)
-            registry.currentState = Lifecycle.State.RESUMED
-        }
+    init {
+        savedState.performRestore(null)
+        registry.currentState = Lifecycle.State.RESUMED
     }
 }

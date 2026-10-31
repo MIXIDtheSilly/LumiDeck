@@ -1,52 +1,19 @@
 package app.lumideck.server
 
-import android.system.ErrnoException
-import android.system.Os
-import android.system.OsConstants
 import android.view.KeyEvent
-import java.io.FileDescriptor
-import java.nio.ByteBuffer
-import java.nio.ByteOrder
-import kotlin.concurrent.thread
 
 /**
- * A USB keyboard made up through Linux's uhid, which the shell user may use. Android
- * treats it as a real keyboard, so it applies the keyboard layout picked for it in
+ * A USB keyboard made up through Linux's uhid ([UhidDevice]). Android treats it as a real
+ * keyboard, so it applies the keyboard layout picked for it in
  * Settings, the Meta key works, and the on-screen keyboard stays away. The PC sends
  * which keys are down, by their USB (HID) codes; this turns them into the keyboard's
  * reports.
  */
 internal class HidKeyboard : AutoCloseable {
-    private val fd: FileDescriptor = Os.open("/dev/uhid", OsConstants.O_RDWR, 0)
+    private val device = UhidDevice(NAME, DESCRIPTOR)
     /** Ctrl, Shift, Alt and Meta, left and right: one bit each. */
     private var modifiers = 0
     private val keys = ArrayList<Int>(6)
-
-    init {
-        val name = NAME.toByteArray()
-        val create = ByteBuffer.allocate(CREATE_SIZE + DESCRIPTOR.size).order(ByteOrder.LITTLE_ENDIAN)
-        create.putInt(UHID_CREATE2)
-        create.put(name.copyOf(128))
-        create.position(create.position() + 64 + 64) // phys, uniq
-        create.putShort(DESCRIPTOR.size.toShort())
-        create.putShort(BUS_VIRTUAL)
-        create.putInt(0) // vendor
-        create.putInt(0) // product
-        create.putInt(0) // version
-        create.putInt(0) // country
-        create.put(DESCRIPTOR)
-        write(create)
-        // The kernel queues events for us (such as the Caps Lock light); nobody needs them,
-        // but they're read so the queue doesn't fill up.
-        thread(name = "uhid", isDaemon = true) {
-            val buffer = ByteArray(4380)
-            try {
-                while (Os.read(fd, buffer, 0, buffer.size) > 0) Unit
-            } catch (e: ErrnoException) {
-                // Closed.
-            }
-        }
-    }
 
     /** The meta state that goes with these keys, for clicks such as Ctrl+click. */
     @get:Synchronized
@@ -80,32 +47,17 @@ internal class HidKeyboard : AutoCloseable {
         report()
     }
 
-    override fun close() {
-        runCatching { write(ByteBuffer.allocate(4).order(ByteOrder.LITTLE_ENDIAN).putInt(UHID_DESTROY)) }
-        runCatching { Os.close(fd) }
-    }
+    override fun close() = device.close()
 
     private fun report() {
-        val event = ByteBuffer.allocate(6 + REPORT_SIZE).order(ByteOrder.LITTLE_ENDIAN)
-        event.putInt(UHID_INPUT2).putShort(REPORT_SIZE.toShort())
-        event.put(modifiers.toByte()).put(0)
-        for (i in 0 until 6) event.put(keys.getOrElse(i) { 0 }.toByte())
-        write(event)
-    }
-
-    private fun write(event: ByteBuffer) {
-        event.flip()
-        while (event.hasRemaining()) Os.write(fd, event)
+        val report = ByteArray(REPORT_SIZE)
+        report[0] = modifiers.toByte()
+        for (i in 0 until 6) report[2 + i] = keys.getOrElse(i) { 0 }.toByte()
+        device.send(report)
     }
 
     private companion object {
         const val NAME = "LumiDeck keyboard"
-        const val UHID_DESTROY = 1
-        const val UHID_CREATE2 = 11
-        const val UHID_INPUT2 = 12
-        const val BUS_VIRTUAL: Short = 6
-        /** struct uhid_create2_req up to its report descriptor, after the event type. */
-        const val CREATE_SIZE = 4 + 128 + 64 + 64 + 2 + 2 + 4 + 4 + 4 + 4
         const val REPORT_SIZE = 8
         const val MODIFIER_FIRST = 0xE0
         const val MODIFIER_LAST = 0xE7

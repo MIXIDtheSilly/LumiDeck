@@ -57,6 +57,13 @@ object HelperLink {
     fun setWifi(on: Boolean) = call { it.setWifi(on) }
     fun setBluetooth(on: Boolean) = call { it.setBluetooth(on) }
 
+    /** The handheld's touchpad: see [IWindowHelper.mouse]. */
+    fun mouse(dx: Int, dy: Int, buttons: Int, wheel: Int = 0, hWheel: Int = 0) =
+        call { it.mouse(dx, dy, buttons, wheel, hWheel) }
+
+    /** A key by its USB (HID) code. */
+    fun key(usage: Int, down: Boolean) = call { it.key(usage, down) }
+
     private inline fun call(target: IWindowHelper? = helper, action: (IWindowHelper) -> Unit) {
         try {
             target?.let(action)
