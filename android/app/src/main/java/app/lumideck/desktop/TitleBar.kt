@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
@@ -27,6 +28,7 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.RectangleShape
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
 import androidx.compose.ui.graphics.drawscope.DrawScope
@@ -44,6 +46,7 @@ import app.lumideck.ui.DeskColors
  * An app window's title bar (see [WindowDecor]), Breeze-style: the app's icon, its name in
  * the middle, then minimise, maximise and close. The window in front gets a bar a shade
  * darker, with its name in full colour. Double-clicking the bar maximises the window.
+ * A [rounded] bar has its top corners rounded, as the top of the window.
  */
 @Composable
 fun TitleBar(
@@ -55,12 +58,14 @@ fun TitleBar(
     onToggleMaximized: () -> Unit,
     onClose: () -> Unit,
     modifier: Modifier = Modifier,
+    rounded: Boolean = false,
 ) {
     val toggleMaximized by rememberUpdatedState(onToggleMaximized)
     val color = if (focused) DeskColors.Text else DeskColors.TextDim
+    val shape = if (rounded) RoundedCornerShape(topStart = WindowCorner, topEnd = WindowCorner) else RectangleShape
     Box(
         modifier
-            .background(if (focused) DeskColors.PanelAlt else DeskColors.Panel)
+            .background(if (focused) DeskColors.PanelAlt else DeskColors.Panel, shape)
             .drawBehind {
                 val y = size.height - 0.5f
                 drawLine(DeskColors.Border, Offset(0f, y), Offset(size.width, y), 1f)
@@ -156,6 +161,13 @@ private fun DrawScope.drawGlyph(glyph: Glyph, color: Color) {
 
 /** How tall title bars are: as tall as Android 13's own, 32dp buttons with 5dp around them. */
 val TitleBarHeight = 42.dp
+
+/**
+ * How round the top corners of windows are, as the taskbar's. Only LumiDeck's title bar and
+ * shadow are: Android 13 lets only SystemUI round an app's own surface, so the bottom
+ * corners stay square, as Breeze has them.
+ */
+val WindowCorner = 8.dp
 
 /**
  * Whether apps draw no title bar of their own, so LumiDeck's goes above each window rather

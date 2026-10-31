@@ -1,9 +1,14 @@
 package app.lumideck.desktop
 
+import android.content.Context
+import android.content.ContextWrapper
+import android.content.pm.ApplicationInfo
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.Path
 import android.graphics.PixelFormat
 import android.graphics.Rect
+import android.graphics.RectF
 import android.graphics.Region
 import android.graphics.drawable.GradientDrawable
 import android.graphics.RegionIterator
@@ -23,6 +28,7 @@ import android.view.SurfaceHolder
 import android.view.SurfaceView
 import android.view.View
 import android.view.ViewConfiguration
+import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
 import android.widget.FrameLayout
 import androidx.activity.ComponentActivity
@@ -34,6 +40,12 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.layout
 import androidx.compose.ui.unit.Constraints
@@ -93,6 +105,22 @@ class WindowDecor(
      * window is picked up held the drag up on the main thread for a quarter of a second.
      */
     private var edges: Handler? = null
+
+    /**
+     * What the windows along the windows' edges are made with, to be drawn in software, on
+     * [edges]. They're a few lines each, but drawn on Android's render thread they waited
+     * behind every other LumiDeck window it drew, ~7 ms each on the RG556, and a window that
+     * was picked up left its edges behind for a tenth of a second. Windows from the activity
+     * are drawn there whatever their flags say; windows with no parent window go by the app.
+     */
+    private val edgeContext: Context by lazy {
+        object : ContextWrapper(activity.createWindowContext(activity.display!!, LayoutParams.TYPE_APPLICATION_OVERLAY, null)) {
+            override fun getApplicationInfo() = ApplicationInfo(super.getApplicationInfo()).apply {
+                flags = flags and ApplicationInfo.FLAG_HARDWARE_ACCELERATED.inv()
+            }
+        }
+    }
+    private val edgeWindows by lazy { edgeContext.getSystemService(WindowManager::class.java) }
 
     /** The windows showing the pieces, kept for reuse so the menus stay in front of them. */
     private val pool = mutableListOf<PieceWindow>()
@@ -230,6 +258,12 @@ class WindowDecor(
 
     /** All of a window at [bounds], its title bar included. */
     private fun outline(bounds: Rect) = Rect(bounds).apply { top = minOf(top, titleArea(bounds).top) }
+
+    /**
+     * Whether [frame]'s top corners are rounded ([WindowCorner]): not when maximised, as on
+     * Plasma, nor when its title bar covers Android's, whose square corners would show.
+     */
+    private fun rounded(frame: Frame) = titleBarsAbove && frame.bounds != windows.maximizedArea()
 
     /** Shows [pieces], each in the window that showed the most of it before, leaving [held] out of other windows' pieces. */
     private fun place(pieces: List<Piece>, held: Rect?) {
@@ -414,12 +448,13 @@ class WindowDecor(
             private set
 
         private var added = false
+        private val windowManager get() = if (forTitle) activity.windowManager else edgeWindows
         private val params = LayoutParams(
             0,
             0,
             LayoutParams.TYPE_APPLICATION_OVERLAY,
-            LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN or
-                LayoutParams.FLAG_LAYOUT_NO_LIMITS or LayoutParams.FLAG_HARDWARE_ACCELERATED,
+            LayoutParams.FLAG_NOT_FOCUSABLE or LayoutParams.FLAG_LAYOUT_IN_SCREEN or LayoutParams.FLAG_LAYOUT_NO_LIMITS or
+                (if (forTitle) LayoutParams.FLAG_HARDWARE_ACCELERATED else 0),
             PixelFormat.TRANSLUCENT,
         ).apply {
             gravity = Gravity.TOP or Gravity.LEFT
@@ -453,6 +488,7 @@ class WindowDecor(
                     frame.bounds.width(),
                     frame.bounds.left - r.left,
                     titleArea(frame.bounds).top - r.top,
+                    rounded(frame),
                 )
             }
             params.x = r.left
@@ -463,16 +499,23 @@ class WindowDecor(
             val params = if (forTitle) params else LayoutParams().apply { copyFrom(params) }
             val first = !added
             added = true
-            val edge = if (forTitle) null else EdgeLook(Rect(r), Rect(piece.frame.bounds), cut)
+            val edge = if (forTitle) null else EdgeLook(Rect(r), Rect(piece.frame.bounds), cut, rounded(piece.frame))
             onViewThread {
-                if (first) overlay.addUnderMenus(view, params) else if (moved) overlay.updateWindow(view, params)
+                // Calls off a hide still waiting to take the window down.
+                shows++
+                blanked = false
+                if (first) {
+                    overlay.addUnderMenus(view, params, windowManager)
+                } else if (moved) {
+                    windowManager.updateViewLayout(view, params)
+                }
                 view.visibility = View.VISIBLE
                 // An edge is drawn from its window's bounds, so only once they change.
                 if (view is EdgeView) {
-                    if (view.look != edge) view.invalidate()
+                    if (view.look != edge) redraw()
                     view.look = edge
                 } else if (cutChanged) {
-                    view.invalidate()
+                    redraw()
                 }
             }
         }
@@ -483,10 +526,80 @@ class WindowDecor(
             busy = false
             cut = null
             onViewThread {
-                view.visibility = View.GONE
-                view.alpha = 1f
-                if (view is EdgeView) view.look = null
+                // Every layout hides the spare windows again.
+                if (blanked) return@onViewThread
+                val hide = ++shows
+                if (view is EdgeView && view.look != null && view.visibility == View.VISIBLE) {
+                    // Blanked first, and the window taken down once that's on screen: taking it
+                    // down waits on Android, which takes up to ~50 ms a window while one's being
+                    // moved, and a moved window's edges stayed behind it for a third of a second.
+                    blanked = true
+                    view.look = null
+                    view.invalidate()
+                    onDrawn {
+                        if (shows == hide) {
+                            blanked = false
+                            view.visibility = View.GONE
+                        }
+                    }
+                } else {
+                    view.visibility = View.GONE
+                    view.alpha = 1f
+                    if (view is EdgeView) view.look = null
+                }
             }
+        }
+
+        /** Shows and hides so far, on the window's thread. */
+        private var shows = 0
+
+        /** Drawn blank, and waiting for that to be on screen to be taken down. */
+        private var blanked = false
+
+        /** A redraw that isn't on screen yet, and whether another is wanted after it. */
+        private var drawing = false
+        private var again = false
+
+        /**
+         * Redraws the window, though not before its last redraw is on screen. Pieces cut to a
+         * window being moved redraw at every step, and Android holds each redraw ~10 ms on the
+         * RG556 for a buffer to draw in. The next redraw waited for that on the window's thread,
+         * which on the main one held up the drag, and the window missed one step in four.
+         */
+        private fun redraw() {
+            // Edges draw in software, there and then.
+            if (!forTitle) return view.invalidate()
+            if (drawing) {
+                again = true
+                return
+            }
+            drawing = true
+            view.invalidate()
+            onDrawn {
+                drawing = false
+                if (again) {
+                    again = false
+                    redraw()
+                }
+            }
+        }
+
+        /** Runs [block] on the window's thread once what it shows now is on screen, or after [DRAWN_MS] at the latest. */
+        private fun onDrawn(block: () -> Unit) {
+            if (!forTitle) {
+                // Drawn in software as the next frame's laid out, and on screen once it's done.
+                Choreographer.getInstance().postFrameCallback { edges?.post(block) }
+                return
+            }
+            var done = false
+            val once = {
+                if (!done) {
+                    done = true
+                    block()
+                }
+            }
+            view.viewTreeObserver.registerFrameCommitCallback(once)
+            (if (forTitle) handler else edges)?.postDelayed(once, DRAWN_MS)
         }
 
         /** Runs [block] on the thread the window runs on: the main one, or for an edge, [edges]. */
@@ -501,20 +614,12 @@ class WindowDecor(
 
         /** Runs [block] once what it shows now is on screen, or after [DRAWN_MS] at the latest. */
         fun afterDraw(block: () -> Unit) {
-            var done = false
-            val once = {
-                if (!done) {
-                    done = true
-                    block()
-                }
-            }
-            view.viewTreeObserver.registerFrameCommitCallback(once)
             view.invalidate()
-            handler.postDelayed(once, DRAWN_MS)
+            onDrawn(block)
         }
 
         fun remove() {
-            if (added) onViewThread { overlay.removeWindow(view) }
+            if (added) onViewThread { windowManager.removeView(view) }
             added = false
         }
     }
@@ -526,7 +631,7 @@ class WindowDecor(
         val item = state.taskbarItems.firstOrNull { item -> item.windows.any { it.taskId == look.taskId } }
         // The window as it is when a button's clicked, since moving it doesn't come through here.
         val task = { window.piece?.frame?.window }
-        Box(Modifier.fillMaxSize().clipToBounds()) {
+        Box(Modifier.fillMaxSize().clipToBounds().drawBehind { if (look.rounded) cornerShadow(look) }) {
             TitleBar(
                 title = item?.label ?: look.packageName,
                 icon = item?.icon,
@@ -535,12 +640,32 @@ class WindowDecor(
                 onMinimize = { task()?.let(windows::minimize) },
                 onToggleMaximized = { task()?.let(windows::toggleMaximized) },
                 onClose = { task()?.let(windows::close) },
+                rounded = look.rounded,
                 // The whole bar, placed so this window shows its part.
                 modifier = Modifier.layout { measurable, constraints ->
                     val bar = measurable.measure(Constraints.fixed(look.width, TitleBarHeight.px()))
                     layout(constraints.maxWidth, constraints.maxHeight) { bar.place(look.dx, look.dy) }
                 },
             )
+        }
+    }
+
+    /**
+     * The shadow ([EdgeView]) around a title bar's rounded corners, in the square corners of
+     * its own window, which the windows along the edges stop short of.
+     */
+    private fun DrawScope.cornerShadow(look: TitleLook) {
+        val corner = WindowCorner.px().toFloat()
+        val grip = GripWidth.px()
+        val left = look.dx + corner
+        val right = look.dx + look.width - corner
+        val top = look.dy + corner
+        for (i in 1..grip) {
+            val color = Color.Black.copy(alpha = shadowAlpha(i, grip) / 255f)
+            val radius = corner + i - 0.5f
+            val size = Size(2 * radius, 2 * radius)
+            drawArc(color, 180f, 90f, false, Offset(left - radius, top - radius), size, style = Stroke(1f))
+            drawArc(color, 270f, 90f, false, Offset(right - radius, top - radius), size, style = Stroke(1f))
         }
     }
 
@@ -606,8 +731,11 @@ class WindowDecor(
     }
 
     /** A strip along a window's edges that resizes it, drawn as the window's shadow. */
-    private inner class EdgeView(private val window: PieceWindow) : View(activity) {
-        private val paint = Paint().apply { style = Paint.Style.STROKE }
+    private inner class EdgeView(private val window: PieceWindow) : View(edgeContext) {
+        private val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
+        private val ring = Path()
+        private val ringBounds = RectF()
+        private val radii = FloatArray(8)
 
         /** What it shows, as its own thread last heard. */
         var look: EdgeLook? = null
@@ -654,11 +782,19 @@ class WindowDecor(
             val grip = GripWidth.px()
             look.cut?.let(canvas::clipOutRect)
             canvas.translate(-look.rect.left.toFloat(), -look.rect.top.toFloat())
-            // One-pixel rings fading out from the window's edge.
+            val corner = if (look.rounded) WindowCorner.px().toFloat() else 0f
+            // One-pixel rings fading out from the window's edge, round with its top corners.
             for (i in 1..grip) {
-                val fade = 1f - (i - 1f) / grip
-                paint.color = android.graphics.Color.argb((SHADOW_ALPHA * fade * fade).roundToInt(), 0, 0, 0)
-                canvas.drawRect(b.left - i + 0.5f, b.top - i + 0.5f, b.right + i - 0.5f, b.bottom + i - 0.5f, paint)
+                paint.color = android.graphics.Color.argb(shadowAlpha(i, grip), 0, 0, 0)
+                ringBounds.set(b.left - i + 0.5f, b.top - i + 0.5f, b.right + i - 0.5f, b.bottom + i - 0.5f)
+                if (corner == 0f) {
+                    canvas.drawRect(ringBounds, paint)
+                    continue
+                }
+                radii.fill(corner + i - 0.5f, 0, 4)
+                ring.reset()
+                ring.addRoundRect(ringBounds, radii, Path.Direction.CW)
+                canvas.drawPath(ring, paint)
             }
         }
     }
@@ -803,7 +939,7 @@ class WindowDecor(
                 this.viewHost = viewHost
                 this.bar = bar
             }
-            look = TitleLook(window.taskId, window.component.packageName, focused = true, maximized = false, width, 0, 0)
+            look = TitleLook(window.taskId, window.component.packageName, focused = true, maximized = false, width, 0, 0, titleBarsAbove)
             if (width != this.width) {
                 this.width = width
                 viewHost?.relayout(width, TitleBarHeight.px())
@@ -894,6 +1030,7 @@ class WindowDecor(
                 onToggleMaximized = {},
                 onClose = {},
                 modifier = Modifier.fillMaxSize(),
+                rounded = look.rounded,
             )
         }
     }
@@ -956,7 +1093,7 @@ class WindowDecor(
     /** A window as its frame is drawn: where it is, perhaps ahead of Android. */
     private data class Frame(val window: TaskWindow, val bounds: Rect, val focused: Boolean)
 
-    /** A title bar as drawn: [width] wide, placed at [dx], [dy] in the window showing part of it. */
+    /** A title bar as drawn: [width] wide, placed at [dx], [dy] in the window showing part of it, maybe [rounded]. */
     private data class TitleLook(
         val taskId: Int,
         val packageName: String,
@@ -965,10 +1102,11 @@ class WindowDecor(
         val width: Int,
         val dx: Int,
         val dy: Int,
+        val rounded: Boolean,
     )
 
-    /** A strip along a window's edges as drawn: where it is, around a window at [bounds], less [cut]. */
-    private data class EdgeLook(val rect: Rect, val bounds: Rect, val cut: Rect?)
+    /** A strip along a window's edges as drawn: where it is, around a window at [bounds], less [cut], maybe [rounded]. */
+    private data class EdgeLook(val rect: Rect, val bounds: Rect, val cut: Rect?, val rounded: Boolean)
 
     /** Part of a window's title bar, or of the strip around its edges. */
     private data class Piece(val frame: Frame, val title: Boolean, val rect: Rect) {
@@ -1015,6 +1153,12 @@ class WindowDecor(
         const val TOP = 2
         const val RIGHT = 4
         const val BOTTOM = 8
+
+        /** How dark the shadow's [i]th ring out of [grip] is, out of 255. */
+        fun shadowAlpha(i: Int, grip: Int): Int {
+            val fade = 1f - (i - 1f) / grip
+            return (SHADOW_ALPHA * fade * fade).roundToInt()
+        }
 
         fun overlap(a: Rect, b: Rect): Int {
             val r = Rect()

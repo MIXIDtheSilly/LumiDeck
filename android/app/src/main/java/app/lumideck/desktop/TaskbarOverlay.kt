@@ -125,7 +125,7 @@ class TaskbarOverlay(
      * menus stay in front of it: Android stacks LumiDeck's windows in the order they're
      * added, so the menu window is added again once it's closed.
      */
-    fun addUnderMenus(view: View, params: LayoutParams) {
+    fun addUnderMenus(view: View, params: LayoutParams, windowManager: WindowManager = this.windowManager) {
         windowManager.addView(view, params)
         menuBuried = true
         // Once, after however many are added together.
