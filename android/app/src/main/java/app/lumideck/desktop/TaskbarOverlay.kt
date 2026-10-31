@@ -107,6 +107,12 @@ class TaskbarOverlay(
         menu = null
     }
 
+    /** Hides the taskbar, as while a fullscreen window is in front, or shows it again. */
+    fun setTaskbarHidden(hidden: Boolean) {
+        // Gone, not see-through: Android would still draw an invisible window.
+        taskbar?.visibility = if (hidden) View.GONE else View.VISIBLE
+    }
+
     /** The strip along the bottom of the screen that the taskbar's window covers. */
     fun taskbarArea(): Rect {
         // The desktop's window covers the whole screen.

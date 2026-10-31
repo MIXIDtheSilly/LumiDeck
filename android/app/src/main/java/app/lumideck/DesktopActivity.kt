@@ -6,15 +6,18 @@ import android.graphics.Color
 import android.os.Bundle
 import android.os.SystemClock
 import android.view.KeyEvent
+import android.view.View
 import androidx.activity.ComponentActivity
 import androidx.activity.OnBackPressedCallback
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.snapshotFlow
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.lifecycle.lifecycleScope
 import app.lumideck.desktop.DesktopScreen
 import app.lumideck.desktop.DesktopState
 import app.lumideck.desktop.MenuLayer
@@ -28,6 +31,9 @@ import app.lumideck.desktop.WindowDecor
 import app.lumideck.desktop.Windows
 import app.lumideck.helper.HelperLink
 import app.lumideck.ui.LumiTheme
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.launch
 
 /** The desktop shown on an external monitor or on the virtual display streamed to a PC. */
 class DesktopActivity : ComponentActivity() {
@@ -65,6 +71,18 @@ class DesktopActivity : ComponentActivity() {
         setContent {
             LumiTheme {
                 DesktopScreen(showShell = !overlayShown.value, state = state, windows = windows)
+            }
+        }
+
+        // While a fullscreen window is in front, the taskbar and the desktop behind it hide,
+        // unless a menu is open, so Android doesn't draw them for nothing. Invisible rather
+        // than gone, so the desktop keeps its size for working out where windows go.
+        lifecycleScope.launch {
+            combine(HelperLink.windows, snapshotFlow { state.anyMenuOpen }) { all, menu ->
+                !menu && windows.fullscreenInFront(all.orEmpty())
+            }.distinctUntilChanged().collect { hidden ->
+                overlay.setTaskbarHidden(hidden)
+                window.decorView.visibility = if (hidden) View.INVISIBLE else View.VISIBLE
             }
         }
 
@@ -128,7 +146,19 @@ class DesktopActivity : ComponentActivity() {
             "snap_left" -> front?.let { windows.snap(it, Snap.Left) }
             "snap_right" -> front?.let { windows.snap(it, Snap.Right) }
             "maximize" -> front?.let(windows::maximize)
-            "restore" -> front?.let { if (windows.isArranged(it)) windows.restore(it) else windows.minimize(it) }
+            "restore" -> front?.let {
+                when {
+                    windows.isFullscreen(it) -> windows.leaveFullscreen(it)
+                    windows.isArranged(it) -> windows.restore(it)
+                    else -> windows.minimize(it)
+                }
+            }
+            "fullscreen" -> front?.let(windows::toggleFullscreen)
+            // The handheld's touchpad buttons (TouchpadOverlay).
+            "menu" -> onMetaTap()
+            "toggle_maximize" -> front?.let(windows::toggleMaximized)
+            "minimize" -> front?.let(windows::minimize)
+            "close" -> front?.let(windows::close)
         }
     }
 

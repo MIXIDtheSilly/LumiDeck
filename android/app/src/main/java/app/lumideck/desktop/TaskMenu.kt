@@ -37,7 +37,10 @@ fun taskActions(item: TaskbarItem, windows: Windows, prefs: LumiPrefs): List<Men
     if (window == null && app != null) add(MenuAction("Open") { windows.launch(app) })
     if (window != null) {
         if (window.freeform) {
-            add(MenuAction(if (windows.isMaximized(window)) "Restore size" else "Maximise") { windows.toggleMaximized(window) })
+            if (!windows.isFullscreen(window)) {
+                add(MenuAction(if (windows.isMaximized(window)) "Restore size" else "Maximise") { windows.toggleMaximized(window) })
+            }
+            add(MenuAction(if (windows.isFullscreen(window)) "Leave fullscreen" else "Fullscreen") { windows.toggleFullscreen(window) })
         }
         add(if (window.visible) MenuAction("Minimise") { windows.minimize(window) } else MenuAction("Show") { windows.activate(window) })
     }

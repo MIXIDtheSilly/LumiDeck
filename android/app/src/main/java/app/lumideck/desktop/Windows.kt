@@ -36,6 +36,9 @@ class Windows(private val activity: Activity) {
     /** Fullscreen windows [adopt] has made windows again, by task id. */
     private val adopted = mutableSetOf<Int>()
 
+    /** Where windows made [fullscreen] go back to, by task id. */
+    private val fullscreenFrom = mutableMapOf<Int, Rect>()
+
     val displayId: Int get() = ContextCompat.getDisplayOrDefault(activity).displayId
 
     /**
@@ -102,6 +105,37 @@ class Windows(private val activity: Activity) {
 
     fun maximize(window: TaskWindow) = arrange(window, maximizedArea())
 
+    fun isFullscreen(window: TaskWindow) = window.freeform && window.taskId in fullscreenFrom && window.bounds == screenArea()
+
+    fun toggleFullscreen(window: TaskWindow) = if (isFullscreen(window)) leaveFullscreen(window) else fullscreen(window)
+
+    /**
+     * Fills the whole screen with [window], taskbar and all. While it's in front, the
+     * taskbar, its title bar and the desktop behind it hide (see DesktopActivity), so Android
+     * draws little more than the app, which saves the device a ms or two on every frame.
+     *
+     * It stays a window the size of the screen. Android's own fullscreen windows would hide
+     * the desktop by themselves, but always reach into the strip along the bottom that the
+     * PC doesn't see, where the navigation bar goes, and games that hide the bar draw there.
+     */
+    fun fullscreen(window: TaskWindow) {
+        if (!window.freeform) return
+        fullscreenFrom[window.taskId] = Rect(window.bounds)
+        HelperLink.resize(window.taskId, screenArea())
+        HelperLink.focus(window.taskId)
+    }
+
+    /** Puts a [fullscreen] window back where it was. */
+    fun leaveFullscreen(window: TaskWindow) {
+        val bounds = fullscreenFrom.remove(window.taskId) ?: return
+        HelperLink.resize(window.taskId, bounds)
+        HelperLink.focus(window.taskId)
+    }
+
+    /** Whether the window in front on this display is [fullscreen], so the taskbar hides. */
+    fun fullscreenInFront(all: List<TaskWindow>) =
+        all.filter { it.displayId == displayId && it.visible }.minByOrNull { it.layer }?.let(::isFullscreen) == true
+
     /** Fills [side]'s half of the screen with [window]. */
     fun snap(window: TaskWindow, side: Snap) = arrange(window, snapArea(side))
 
@@ -136,7 +170,7 @@ class Windows(private val activity: Activity) {
         val area = maximizedArea()
         if (area.isEmpty) return
         for (window in shown) {
-            if (window.displayId != displayId || !window.visible) continue
+            if (window.displayId != displayId || !window.visible || isFullscreen(window)) continue
             if (window.freeform) {
                 // Windows Android places itself can start too high for a title bar above them.
                 if (window.bounds.top < area.top) HelperLink.resize(window.taskId, Rect(window.bounds).apply { offset(0, area.top - top) })
@@ -147,8 +181,9 @@ class Windows(private val activity: Activity) {
     }
 
     private fun arrange(window: TaskWindow, bounds: Rect) {
-        // Windows that fill the screen whatever their bounds say can't be arranged.
-        if (!window.freeform) return
+        // Windows that fill the screen whatever their bounds say can't be arranged, and
+        // fullscreen ones leave fullscreen first.
+        if (!window.freeform || isFullscreen(window)) return
         place(window.taskId, bounds, if (isArranged(window)) restoreBounds[window.taskId] ?: nextBounds() else window.bounds)
     }
 
@@ -174,14 +209,22 @@ class Windows(private val activity: Activity) {
      * bottom edge.
      */
     private fun areaAbove(attached: Boolean): Rect {
+        val density = activity.resources.displayMetrics.density
+        val taskbar = (panelFootprint(prefs.taskbarSize, attached).value * density).toInt()
+        val top = if (titleBarsAbove) (TitleBarHeight.value * density).roundToInt() else 0
+        return screenArea().apply {
+            this.top = top
+            bottom -= taskbar
+        }
+    }
+
+    /** The screen above the system navigation bar: what the PC shows (see the client's main.rs). */
+    private fun screenArea(): Rect {
         // The desktop's window covers the whole screen, nav bar included, unlike displayMetrics.
         val desktop = activity.window.decorView
         val navBar = ViewCompat.getRootWindowInsets(desktop)
             ?.getInsetsIgnoringVisibility(WindowInsetsCompat.Type.navigationBars())?.bottom ?: 0
-        val density = activity.resources.displayMetrics.density
-        val taskbar = (panelFootprint(prefs.taskbarSize, attached).value * density).toInt()
-        val top = if (titleBarsAbove) (TitleBarHeight.value * density).roundToInt() else 0
-        return Rect(0, top, desktop.width, desktop.height - navBar - taskbar)
+        return Rect(0, 0, desktop.width, desktop.height - navBar)
     }
 
     private fun nextBounds(): Rect {

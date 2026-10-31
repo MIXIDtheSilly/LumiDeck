@@ -191,14 +191,16 @@ class WindowDecor(
         val moving = held?.takeIf { gesture?.edges == 0 }
         val dragged = moving?.takeIf { dragBar.showing }
         for (frame in frames) {
-            val bounds = if (frame.window.freeform) outline(frame.bounds) else frame.bounds
-            if (frame.window.freeform && frame.window.taskId != dragged) {
+            // Fullscreen windows go without, as windows that aren't freeform do.
+            val decorated = frame.window.freeform && !windows.isFullscreen(frame.window)
+            val bounds = if (decorated) outline(frame.bounds) else frame.bounds
+            if (decorated && frame.window.taskId != dragged) {
                 val title = Region(titleArea(frame.bounds))
                 title.op(screen, Region.Op.INTERSECT)
                 title.op(covered, Region.Op.DIFFERENCE)
                 title.rects().mapTo(titles) { Piece(frame, title = true, it) }
             }
-            if (frame.window.freeform && frame.window.taskId != moving) {
+            if (decorated && frame.window.taskId != moving) {
                 val ring = Region(bounds.left - grip, bounds.top - grip, bounds.right + grip, bounds.bottom + grip)
                 ring.op(bounds, Region.Op.DIFFERENCE)
                 ring.op(screen, Region.Op.INTERSECT)

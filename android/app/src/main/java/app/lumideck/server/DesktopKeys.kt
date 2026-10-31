@@ -13,6 +13,7 @@ import app.lumideck.helper.callLumiDeck
  *   Esc while Alt is held gives up.
  * - Meta+Left and Meta+Right snap the window in front to that half of the screen, Meta+Up
  *   maximises it, and Meta+Down restores it, or minimises it if it wasn't snapped.
+ * - F11 makes the window in front fill the whole screen, or puts it back, as Meta+Down does too.
  *
  * Meta itself only goes on once another key comes with it, or as a tap once it's let go:
  * Android takes a Meta press with nothing else for a tap, which opens LumiDeck's menu.
@@ -86,6 +87,10 @@ internal class DesktopKeys(private val displayId: Int, private val keyboard: Hid
             shortcut("switch_cancel")
             return true
         }
+        if (usage == F11 && !alt && !ctrl && !meta && !shift) {
+            shortcut("fullscreen")
+            return true
+        }
         if (meta && !alt && !ctrl && heldMeta >= 0) {
             val name = when (usage) {
                 LEFT -> "snap_left"
@@ -140,6 +145,7 @@ internal class DesktopKeys(private val displayId: Int, private val keyboard: Hid
         // USB HID usage codes.
         const val TAB = 0x2B
         const val ESCAPE = 0x29
+        const val F11 = 0x44
         const val RIGHT = 0x4F
         const val LEFT = 0x50
         const val DOWN = 0x51
