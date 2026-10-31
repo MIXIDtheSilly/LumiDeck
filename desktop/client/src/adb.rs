@@ -260,7 +260,9 @@ fn run(command: &mut Command) -> Result<String> {
     Ok(String::from_utf8_lossy(&output.stdout).into_owned())
 }
 
-/// adb from the PATH, the Android SDK, or scrcpy's folder (as winget installs it).
+/// adb from the PATH, the Android SDK, or scrcpy's folder (as winget installs it), or else
+/// the one installed with LumiDeck, next to this program. One already there comes first:
+/// two different adbs on one PC keep stopping each other's server.
 fn find_adb() -> Result<PathBuf> {
     if let Ok(path) = env::var("PATH") {
         for dir in env::split_paths(&path) {
@@ -286,6 +288,9 @@ fn find_adb() -> Result<PathBuf> {
                 candidates.push(entry.path().join("adb.exe"));
             }
         }
+    }
+    if let Ok(exe) = env::current_exe() {
+        candidates.push(exe.with_file_name("adb.exe"));
     }
     candidates
         .into_iter()

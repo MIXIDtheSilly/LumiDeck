@@ -772,7 +772,8 @@ fn adb_devices() -> Vec<(String, String)> {
         .collect()
 }
 
-/// adb.exe, where the client looks for it too (client/src/adb.rs).
+/// adb.exe, where the client looks for it too (client/src/adb.rs), the one installed with
+/// LumiDeck last.
 fn find_adb() -> Option<PathBuf> {
     let on_path = env::var_os("PATH").into_iter().flat_map(|path| env::split_paths(&path).collect::<Vec<_>>());
     let local = env::var("LOCALAPPDATA").map(PathBuf::from).unwrap_or_default();
@@ -790,6 +791,7 @@ fn find_adb() -> Option<PathBuf> {
         .chain([local.join("Android").join("Sdk").join("platform-tools")])
         .chain(sdk.map(|s| s.join("platform-tools")))
         .chain(winget)
+        .chain(env::current_exe().ok().and_then(|exe| exe.parent().map(PathBuf::from)))
         .map(|dir| dir.join("adb.exe"))
         .find(|exe| exe.is_file())
 }
