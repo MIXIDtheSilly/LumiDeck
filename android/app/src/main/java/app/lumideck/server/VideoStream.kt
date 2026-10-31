@@ -95,6 +95,11 @@ internal class VirtualScreen(width: Int, height: Int, dpi: Int) {
  * the bits, which only makes the stream bigger. None of the encoder's other settings
  * change the pairing: operating rate, low latency, bit rate mode, scene mode.
  *
+ * One core at a time also slows the clock: the encoder picks it from width × height ×
+ * frames at once, and 1920x1080 one at a time falls just short of its fastest, 384 MHz
+ * instead of 512. It also goes fastest while two encoders are open, so a second one sits
+ * idle beside this one ([keepClockUp]), which takes each frame from ~12 to ~9 ms.
+ *
  * When the screen stops changing, the encoder repeats the last frame after
  * [Options.repeatAfterMs], in better quality each time. With pairs, the first repeat also
  * gets the last frame out. It goes to the PC as a copy, decoded but not shown. The delay
@@ -134,6 +139,7 @@ internal class VideoStream(
         val surface = codec.createInputSurface()
         screen.setSurface(surface)
         codec.start()
+        val idle = if ("clock" in options.tune) keepClockUp(codec.name) else null
         val info = MediaCodec.BufferInfo()
         val header = ByteBuffer.allocate(PACKET_HEADER).order(ByteOrder.BIG_ENDIAN)
         try {
@@ -161,6 +167,38 @@ internal class VideoStream(
             runCatching { codec.stop() }
             codec.release()
             surface.release()
+            idle?.let { runCatching(it::stop); it.release() }
+        }
+    }
+
+    /**
+     * Opens a second encoder that gets one blank frame and nothing after, to keep a Unisoc
+     * encoder on its fastest clock (see the class notes). The encoder only takes the
+     * hardware with its first frame. Null on other encoders, or if it won't open.
+     */
+    private fun keepClockUp(name: String): MediaCodec? {
+        if (!name.startsWith(UNISOC)) return null
+        val idleName = encoderFor(MediaFormat.MIMETYPE_VIDEO_AVC)?.takeIf { it.startsWith(UNISOC) } ?: return null
+        val codec = MediaCodec.createByCodecName(idleName)
+        return try {
+            codec.configure(
+                MediaFormat.createVideoFormat(MediaFormat.MIMETYPE_VIDEO_AVC, IDLE_WIDTH, IDLE_HEIGHT).apply {
+                    setInteger(MediaFormat.KEY_COLOR_FORMAT, MediaCodecInfo.CodecCapabilities.COLOR_FormatYUV420Flexible)
+                    setInteger(MediaFormat.KEY_BIT_RATE, 100_000)
+                    setInteger(MediaFormat.KEY_FRAME_RATE, 1)
+                    setInteger(MediaFormat.KEY_I_FRAME_INTERVAL, 10)
+                },
+                null, null, MediaCodec.CONFIGURE_FLAG_ENCODE,
+            )
+            codec.start()
+            val index = codec.dequeueInputBuffer(1_000_000)
+            check(index >= 0) { "no input buffer" }
+            codec.queueInputBuffer(index, 0, IDLE_WIDTH * IDLE_HEIGHT * 3 / 2, 0, 0)
+            codec
+        } catch (e: Exception) {
+            System.err.println("Couldn't keep the encoder's clock up: $e")
+            codec.release()
+            null
         }
     }
 
@@ -200,7 +238,7 @@ internal class VideoStream(
         // out of the encoder, the next ones let its quality catch up.
         if (repeating) setLong(MediaFormat.KEY_REPEAT_PREVIOUS_FRAME_AFTER, repeatAfterUs)
         if ("priority" in tune) setInteger(MediaFormat.KEY_PRIORITY, 0)
-        if ("latency" in tune) setInteger(KEY_LATENCY, 0)
+        if ("latency" in tune) setInteger(KEY_LATENCY, options.latencyFrames)
         if ("bframes" in tune) setInteger(MediaFormat.KEY_MAX_B_FRAMES, 0)
         if ("prepend" in tune) setInteger(MediaFormat.KEY_PREPEND_HEADER_TO_SYNC_FRAMES, 1)
         // Drops frames before the encoder rather than letting them queue up behind it.
@@ -275,6 +313,9 @@ internal class VideoStream(
         private const val PACKET_HEADER = 12
         private const val KEY_LATENCY = "latency"
         private const val KEY_MAX_FPS_TO_ENCODER = "max-fps-to-encoder"
+        private const val UNISOC = "c2.unisoc."
+        private const val IDLE_WIDTH = 320
+        private const val IDLE_HEIGHT = 240
         private const val STATS_NS = 5_000_000_000L
     }
 }

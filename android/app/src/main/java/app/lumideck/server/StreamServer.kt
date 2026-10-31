@@ -31,8 +31,15 @@ internal class Options(args: Array<String>) {
     val frameRate = int("frame_rate", 30)
     /** How long the screen stays still before the encoder repeats the last frame (see [VideoStream]). */
     val repeatAfterMs = int("repeat_after", 100)
+    /**
+     * How many frames the encoder may hold before it hands one out (MediaFormat.KEY_LATENCY,
+     * with "latency" in [tune]). It counts frames, so 1 is the least that means anything.
+     */
+    val latencyFrames = int("latency", 1)
     val audio = bool("audio", true)
     val stayAwake = bool("stay_awake", true)
+    /** Android's own animations for windows opening, closing and coming to the front. */
+    val windowAnimations = bool("window_animations", false)
     val stats = bool("stats", false)
     /** "adb" (sockets that the PC reaches through `adb forward`) or "usb" (see [UsbLink]). */
     val link = values["link"] ?: "adb"
@@ -41,9 +48,9 @@ internal class Options(args: Array<String>) {
     /**
      * Encoder settings to use, for finding out which ones a device's encoder dislikes.
      * "prepend" is off by default: the RG556's HEVC encoder blanks the key frames it
-     * prepends to.
+     * prepends to. "clock" keeps a Unisoc encoder at its fastest clock (see [VideoStream]).
      */
-    val tune = (values["tune"] ?: "repeat,priority,latency,bframes").split(',').toSet()
+    val tune = (values["tune"] ?: "repeat,priority,latency,bframes,clock").split(',').toSet()
 
     private fun int(key: String, default: Int) = values[key]?.toIntOrNull() ?: default
 
