@@ -1,6 +1,8 @@
 //! Shows decoded frames in the window. The GPU's video processor converts each frame from
 //! the decoder's YUV to the window's RGB, crops and scales it in one pass, and the swap
-//! chain flips it onto the screen without waiting for the display's refresh.
+//! chain flips it onto the screen at the display's next refresh. Flipped there and then, as
+//! it once was, the display showed the new frame below the line it had got to and the last
+//! one above, and a window being dragged looked cut in two.
 
 use std::collections::HashMap;
 use std::mem::ManuallyDrop;
@@ -54,7 +56,6 @@ pub struct Renderer {
     video_device: ID3D11VideoDevice,
     video_context: ID3D11VideoContext,
     swap_chain: IDXGISwapChain1,
-    tearing: bool,
     size: (u32, u32),
     processor: Option<Processor>,
     output: Option<ID3D11VideoProcessorOutputView>,
@@ -94,18 +95,18 @@ impl Renderer {
         let video_context: ID3D11VideoContext = context.cast()?;
 
         let factory: IDXGIFactory2 = unsafe { device.cast::<IDXGIDevice>()?.GetAdapter()?.GetParent()? };
-        let tearing = tearing_supported(&factory);
         let desc = DXGI_SWAP_CHAIN_DESC1 {
             Width: size.0.max(1),
             Height: size.1.max(1),
             Format: DXGI_FORMAT_B8G8R8A8_UNORM,
             SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
             BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-            BufferCount: 2,
+            // One on screen, one waiting for the refresh, and one to draw the next frame in,
+            // which replaces the waiting one if it comes first (see present()).
+            BufferCount: 3,
             Scaling: DXGI_SCALING_NONE,
             SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
             AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-            Flags: swap_chain_flags(tearing),
             ..Default::default()
         };
         let swap_chain = unsafe { factory.CreateSwapChainForHwnd(&device, hwnd, &desc, None, None)? };
@@ -117,7 +118,6 @@ impl Renderer {
             video_device,
             video_context,
             swap_chain,
-            tearing,
             size: (desc.Width, desc.Height),
             processor: None,
             output: None,
@@ -138,7 +138,7 @@ impl Renderer {
                     window.0,
                     window.1,
                     DXGI_FORMAT_UNKNOWN,
-                    DXGI_SWAP_CHAIN_FLAG(swap_chain_flags(self.tearing) as i32),
+                    DXGI_SWAP_CHAIN_FLAG(0),
                 )?;
             }
             self.size = window;
@@ -227,9 +227,10 @@ impl Renderer {
         self.present()
     }
 
+    /// Shows the frame at the next refresh, without waiting for it: with a flip swap chain,
+    /// a frame presented with no sync interval goes up then, unless a newer one comes first.
     fn present(&self) -> Result<()> {
-        let flags = if self.tearing { DXGI_PRESENT_ALLOW_TEARING } else { DXGI_PRESENT(0) };
-        unsafe { self.swap_chain.Present(0, flags).ok()? };
+        unsafe { self.swap_chain.Present(0, DXGI_PRESENT(0)).ok()? };
         Ok(())
     }
 
@@ -259,21 +260,4 @@ fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
 fn color_space(yuv: bool, bt709: bool, full_range: bool) -> D3D11_VIDEO_PROCESSOR_COLOR_SPACE {
     let bits = if yuv { ((bt709 as u32) << 2) | (if full_range { 2 } else { 1 } << 4) } else { 0 };
     D3D11_VIDEO_PROCESSOR_COLOR_SPACE { _bitfield: bits }
-}
-
-fn tearing_supported(factory: &IDXGIFactory2) -> bool {
-    let Ok(factory) = factory.cast::<IDXGIFactory5>() else { return false };
-    let mut allowed = BOOL::default();
-    let ok = unsafe {
-        factory.CheckFeatureSupport(
-            DXGI_FEATURE_PRESENT_ALLOW_TEARING,
-            &mut allowed as *mut BOOL as *mut _,
-            size_of::<BOOL>() as u32,
-        )
-    };
-    ok.is_ok() && allowed.as_bool()
-}
-
-fn swap_chain_flags(tearing: bool) -> u32 {
-    if tearing { DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING.0 as u32 } else { 0 }
 }
