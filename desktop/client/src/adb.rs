@@ -14,8 +14,9 @@ use anyhow::{Context, Result, anyhow, bail};
 
 use crate::protocol::{HELLO, SOCKET};
 
-const PACKAGE: &str = "app.lumideck";
+pub const PACKAGE: &str = "app.lumideck";
 
+#[derive(Clone)]
 pub struct Adb {
     exe: PathBuf,
     pub serial: String,
@@ -86,19 +87,35 @@ impl Adb {
 
     /// What lumideck.ps1 used to do before each session.
     pub fn prepare(&self) -> Result<()> {
+        self.apk()?;
         // Some firmware (seen on the Anbernic RG556) keeps LumiDeck as the home role holder
         // after a reboot but stops resolving it as home, so the desktop would come up as the
         // stock launcher. Adding the role again fixes it; skipped if the user picked another.
+        if self.home_holder()?.as_deref() == Some(PACKAGE) {
+            self.shell(&format!("cmd role add-role-holder android.app.role.HOME {PACKAGE}"))?;
+        }
+        if self.prepare_device()? {
+            println!("Restart the device once to give app windows LumiDeck's title bars only");
+        }
+        Ok(())
+    }
+
+    /// The app holding Android's home role, if any.
+    pub fn home_holder(&self) -> Result<Option<String>> {
         let roles = self.shell("dumpsys role")?;
         let mut lines = roles.lines();
         while let Some(line) = lines.next() {
             if line.contains("android.app.role.HOME") {
-                if lines.next().is_some_and(|holders| holders.contains(&format!("holders={PACKAGE}"))) {
-                    self.shell(&format!("cmd role add-role-holder android.app.role.HOME {PACKAGE}"))?;
-                }
-                break;
+                let holders = lines.next().and_then(|line| line.split_once("holders=")).map(|(_, h)| h.trim());
+                return Ok(holders.filter(|h| !h.is_empty()).map(|h| h.split(',').next().unwrap().to_string()));
             }
         }
+        Ok(None)
+    }
+
+    /// Allows what LumiDeck needs that only ADB can. Says whether the device needs
+    /// restarting for some of it.
+    pub fn prepare_device(&self) -> Result<bool> {
         // Lets the taskbar and title bars stay above app windows ("Display over other apps"),
         // and quick settings change the brightness and Do not disturb and see Bluetooth.
         // Also in scripts/common.ps1 (Grant-LumiPermissions).
@@ -110,9 +127,9 @@ impl Adb {
         // own above them instead of over Android's. Apps only follow it from the next restart.
         if self.shell("getprop persist.debug.caption_on_shell")?.trim() != "true" {
             self.shell("setprop persist.debug.caption_on_shell true")?;
-            println!("Restart the device once to give app windows LumiDeck's title bars only");
+            return Ok(true);
         }
-        Ok(())
+        Ok(false)
     }
 
     /// Starts the window helper, for the taskbar's running apps and the title bars. It
@@ -126,12 +143,15 @@ impl Adb {
     }
 
     fn apk(&self) -> Result<String> {
+        self.installed_apk()?.ok_or_else(|| {
+            anyhow!("LumiDeck isn't on the device yet. Set the device up from the LumiDeck app on this PC first.")
+        })
+    }
+
+    /// Where LumiDeck's APK is on the device, if it's installed.
+    pub fn installed_apk(&self) -> Result<Option<String>> {
         let output = self.shell(&format!("pm path {PACKAGE}"))?;
-        output
-            .lines()
-            .find_map(|line| line.trim().strip_prefix("package:"))
-            .map(str::to_string)
-            .ok_or_else(|| anyhow!("LumiDeck isn't installed on the device. Run scripts\\setup-device.ps1 first."))
+        Ok(output.lines().find_map(|line| line.trim().strip_prefix("package:")).map(str::to_string))
     }
 
     /// Starts the stream server with `options`. Over ADB (not `usb`), it comes with a free

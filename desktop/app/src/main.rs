@@ -9,6 +9,9 @@
 //! opens, after the window's settings. `--hidden` starts it in the tray only, as it starts
 //! with Windows.
 //!
+//! It also sets the device up for LumiDeck, or updates it, through lumideck.exe
+//! (`--device-status`, `--setup-device`), which installs the lumideck.apk next to it.
+//!
 //! The page sends commands such as `open` or `set dpi 200` (the `page` command), and gets
 //! what it shows back as a `state` event. Everything else happens on the main thread too,
 //! which is where Tauri runs the tray, the menu and synchronous commands.
@@ -68,6 +71,8 @@ struct Session {
 struct Settings {
     resolution: String,
     dpi: u32,
+    /// Mbit/s
+    bitrate: u32,
     fullscreen: bool,
     audio: bool,
     auto_connect: bool,
@@ -81,6 +86,7 @@ impl Settings {
                 .filter(|r| valid_resolution(r))
                 .unwrap_or_else(|| "1920x1080".into()),
             dpi: read_dword(SETTINGS_KEY, "Dpi").filter(|d| valid_dpi(*d)).unwrap_or(160),
+            bitrate: read_dword(SETTINGS_KEY, "Bitrate").filter(|b| valid_bitrate(*b)).unwrap_or(15),
             fullscreen: flag("Fullscreen", false),
             audio: flag("Audio", true),
             auto_connect: flag("AutoConnect", true),
@@ -89,7 +95,14 @@ impl Settings {
 
     /// lumideck.exe's options for them.
     fn args(&self) -> Vec<String> {
-        let mut args = vec!["--resolution".into(), self.resolution.clone(), "--dpi".into(), self.dpi.to_string()];
+        let mut args = vec![
+            "--resolution".into(),
+            self.resolution.clone(),
+            "--dpi".into(),
+            self.dpi.to_string(),
+            "--bitrate".into(),
+            self.bitrate.to_string(),
+        ];
         if self.fullscreen {
             args.push("--fullscreen".into());
         }
@@ -111,6 +124,10 @@ fn valid_dpi(dpi: u32) -> bool {
     (80..=640).contains(&dpi)
 }
 
+fn valid_bitrate(mbits: u32) -> bool {
+    (1..=100).contains(&mbits)
+}
+
 /// What threads find out for the window.
 #[derive(Default)]
 struct Found {
@@ -121,6 +138,10 @@ struct Found {
     /// Whether this PC is set up for the USB link, once checked.
     usb_ready: Option<bool>,
     usb_busy: bool,
+    /// How far the device is set up, by serial, as lumideck.exe --device-status says.
+    device_status: HashMap<String, String>,
+    /// What setting the device up is doing, while it is.
+    device_setup: Option<String>,
 }
 
 struct Lumi {
@@ -141,6 +162,8 @@ struct Lumi {
     found: Arc<Mutex<Found>>,
     /// When the battery was last asked for, and for which device.
     battery_asked: Option<(String, Instant)>,
+    /// The device whose setup was last checked.
+    status_asked: Option<String>,
     /// What the window and the tray show, to only send changes.
     shown: String,
     tip: &'static str,
@@ -295,6 +318,7 @@ impl Lumi {
             wants_home: false,
             found: Arc::default(),
             battery_asked: None,
+            status_asked: None,
             shown: String::new(),
             tip: "",
         })
@@ -319,6 +343,10 @@ impl Lumi {
             let last = self.seen.insert(serial.clone(), now);
             if last.is_none_or(|last| now - last > GONE_FOR) {
                 fresh.push(serial.clone());
+                // Plugged in again, maybe restarted or set up elsewhere: check again.
+                if self.status_asked.as_ref() == Some(serial) {
+                    self.status_asked = None;
+                }
             }
             self.names.insert(serial.clone(), name.clone());
         }
@@ -334,9 +362,14 @@ impl Lumi {
                 self.fail(why);
             }
         }
+        // Not a device without LumiDeck: the window offers to set it up instead.
         if self.session.is_none()
             && self.settings.auto_connect
             && let Some(serial) = fresh.first()
+            && !matches!(
+                self.found.lock().unwrap().device_status.get(serial).map(String::as_str),
+                Some("install" | "unsupported")
+            )
         {
             self.start(serial.clone());
         }
@@ -412,6 +445,8 @@ impl Lumi {
             (Some("ready"), ..) => self.refresh(true),
             (Some("open" | "show"), ..) => self.open(),
             (Some("close"), ..) => self.close(),
+            (Some("setupDevice"), ..) => self.setup_device(),
+            (Some("restartDevice"), ..) => self.restart_device(),
             (Some("set"), Some(key), Some(value)) => {
                 let on = value == "1";
                 match key {
@@ -425,6 +460,14 @@ impl Lumi {
                         {
                             self.settings.dpi = dpi;
                             write_dword(SETTINGS_KEY, "Dpi", dpi);
+                        }
+                    }
+                    "bitrate" => {
+                        if let Ok(bitrate) = value.parse()
+                            && valid_bitrate(bitrate)
+                        {
+                            self.settings.bitrate = bitrate;
+                            write_dword(SETTINGS_KEY, "Bitrate", bitrate);
                         }
                     }
                     "fullscreen" => {
@@ -468,6 +511,12 @@ impl Lumi {
         }
 
         let device = self.device();
+        if let Some(serial) = &device
+            && self.status_asked.as_ref() != Some(serial)
+        {
+            self.status_asked = Some(serial.clone());
+            self.ask_status(serial.clone());
+        }
         if let Some(serial) = &device {
             let due =
                 self.battery_asked.as_ref().is_none_or(|(asked, at)| asked != serial || at.elapsed() >= BATTERY_EVERY);
@@ -485,6 +534,7 @@ impl Lumi {
             (_, Some(false)) => "none",
             (_, None) => "unknown",
         };
+        let setup = device.as_ref().and_then(|serial| found.device_status.get(serial)).cloned();
         let device = device.map(|serial| {
             let name = found.models.get(&serial).or(self.names.get(&serial)).cloned().unwrap_or_else(|| serial.clone());
             json!({ "name": name, "serial": serial })
@@ -497,9 +547,12 @@ impl Lumi {
             "charging": battery.is_some_and(|(_, _, charging)| *charging),
             "error": self.error,
             "usb": usb,
+            "setup": setup,
+            "settingUp": found.device_setup,
             "settings": {
                 "resolution": self.settings.resolution,
                 "dpi": self.settings.dpi,
+                "bitrate": self.settings.bitrate,
                 "fullscreen": self.settings.fullscreen,
                 "audio": self.settings.audio,
                 "autoConnect": self.settings.auto_connect,
@@ -543,6 +596,90 @@ impl Lumi {
             drop(found);
             refresh_later(&app);
         });
+    }
+
+    /// Finds out how far the device is set up, on another thread.
+    fn ask_status(&self, serial: String) {
+        let found = self.found.clone();
+        let app = self.app.clone();
+        thread::spawn(move || {
+            let Ok(output) = Command::new(sibling("lumideck.exe"))
+                .args(["--device-status", "--serial", &serial])
+                .creation_flags(CREATE_NO_WINDOW)
+                .output()
+            else {
+                return;
+            };
+            let text = String::from_utf8_lossy(&output.stdout);
+            let Some(status) = text.lines().map(str::trim).rfind(|l| !l.is_empty()) else { return };
+            if !output.status.success() {
+                return;
+            }
+            found.lock().unwrap().device_status.insert(serial, status.to_string());
+            refresh_later(&app);
+        });
+    }
+
+    /// Installs or updates LumiDeck on the device and sets it up, on another thread,
+    /// showing each step in the window.
+    fn setup_device(&mut self) {
+        let Some(serial) = self.device() else { return };
+        if self.session.is_some() || self.found.lock().unwrap().device_setup.is_some() {
+            return;
+        }
+        let mut command = Command::new(sibling("lumideck.exe"));
+        command.args(["--setup-device", "--serial", &serial]);
+        command.stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).creation_flags(CREATE_NO_WINDOW);
+        let mut child = match command.spawn() {
+            Ok(child) => child,
+            Err(e) => return self.fail(format!("lumideck.exe: {e}")),
+        };
+        self.error = None;
+        self.found.lock().unwrap().device_setup = Some("Getting started…".into());
+        let (stdout, stderr) = (child.stdout.take().unwrap(), child.stderr.take().unwrap());
+        let errors = thread::spawn(move || {
+            BufReader::new(stderr).lines().map_while(Result::ok).filter(|l| !l.trim().is_empty()).last()
+        });
+        let found = self.found.clone();
+        let app = self.app.clone();
+        thread::spawn(move || {
+            for line in BufReader::new(stdout).lines().map_while(Result::ok) {
+                if !line.trim().is_empty() {
+                    found.lock().unwrap().device_setup = Some(line);
+                    refresh_later(&app);
+                }
+            }
+            let ok = child.wait().is_ok_and(|status| status.success());
+            let error = errors.join().ok().flatten();
+            found.lock().unwrap().device_setup = None;
+            let handle = app.clone();
+            let _ = app.run_on_main_thread(move || {
+                run(&handle, |lumi| {
+                    if !ok {
+                        lumi.fail(error.unwrap_or_else(|| "Setting the device up failed.".into()));
+                    }
+                    // Check again, which updates the window.
+                    lumi.status_asked = None;
+                    lumi.refresh(false);
+                });
+            });
+        });
+        self.refresh(false);
+    }
+
+    /// Restarts the device, which setting it up can need once.
+    fn restart_device(&mut self) {
+        let Some(serial) = self.device() else { return };
+        if self.session.is_some() {
+            return;
+        }
+        self.found.lock().unwrap().device_status.remove(&serial);
+        thread::spawn(move || {
+            if let Some(adb) = find_adb() {
+                let _ = Command::new(adb).args(["-s", &serial, "reboot"]).creation_flags(CREATE_NO_WINDOW).status();
+            }
+        });
+        self.refresh(false);
     }
 
     /// Finds out whether this PC is set up for the USB link, on another thread.

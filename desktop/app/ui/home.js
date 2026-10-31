@@ -7,6 +7,8 @@ const appWindow = window.__TAURI__.window.getCurrentWindow();
 
 const RESOLUTIONS = [[1280, 720], [1600, 900], [1920, 1080], [2560, 1440], [3840, 2160]];
 const SCALES = [[160, "100%"], [200, "125%"], [240, "150%"], [280, "175%"], [320, "200%"]];
+// Mbit/s. The device's encoder goes well past what it says it can do (25) while scrolling.
+const BITRATES = [[8, "Smoothest"], [15, "Default"], [25, ""], [40, ""], [100, "Sharpest"]];
 const CHECK = '<svg class="icon" viewBox="0 0 24 24"><path d="M6 12.5l4 4 8-9"/></svg>';
 const $ = id => document.getElementById(id);
 const send = message => invoke("page", { message });
@@ -20,12 +22,14 @@ const resolutions = () => {
   return list.sort((a, b) => a[0] * a[1] - b[0] * b[1]);
 };
 const resolutionLabel = r => r.replace("x", " × ");
+const bitrateLabel = mbits => `${mbits} Mbit/s`;
 const scaleLabel = dpi => (SCALES.find(([d]) => d === dpi) || [dpi, Math.round(dpi / 1.6) + "%"])[1];
 
+// Drawn at its size in pixels (24 � 14), so its lines stay sharp.
 function batteryIcon(level) {
-  const width = Math.max(1.5, 16 * level / 100);
-  return `<svg viewBox="0 0 24 14"><rect x="1" y="1" width="19" height="12" rx="3" fill="none" stroke="currentColor" stroke-width="1.4"/>` +
-    `<rect x="3.5" y="3.5" width="${width.toFixed(1)}" height="7" rx="1.2" fill="currentColor"/><rect x="21" y="4.5" width="2" height="5" rx="1" fill="currentColor"/></svg>`;
+  const width = Math.max(2, Math.round(15 * level / 100));
+  return `<svg viewBox="0 0 24 14"><rect x=".5" y=".5" width="20" height="13" rx="3" fill="none" stroke="currentColor"/>` +
+    `<rect x="3" y="3" width="${width}" height="8" rx="1" fill="currentColor"/><path d="M21.5 4.5a1.5 1.5 0 0 1 1.5 1.5v2a1.5 1.5 0 0 1-1.5 1.5z" fill="currentColor"/></svg>`;
 }
 
 function render(next) {
@@ -52,14 +56,30 @@ function render(next) {
   $("error").hidden = !state.error;
   $("error").textContent = state.error || "";
 
+  // Setting the device up: what it needs, and the button that does it.
+  const [notice, action] = !device || session ? [] : state.settingUp ? [state.settingUp, "Setting up…"] : ({
+    install: ["LumiDeck isn't on this device yet.", "Set up"],
+    update: ["A newer LumiDeck is ready for this device.", "Update"],
+    setup: ["Desktop mode is off on this device, or LumiDeck isn't its home app.", "Set up"],
+    restart: ["Restart the device once to finish setting it up.", "Restart"],
+    unsupported: ["LumiDeck needs Android 10 or newer."],
+  })[state.setup] || [];
+  $("notice").hidden = !notice;
+  $("notice").textContent = notice || "";
+  const setupButton = $("setup");
+  setupButton.hidden = !action;
+  setupButton.textContent = action || "";
+  setupButton.disabled = !!state.settingUp;
+  const needsSetup = state.setup === "install" || state.setup === "unsupported";
+
   const open = $("open");
-  open.disabled = !device && !session;
+  open.disabled = (!device && !session) || (!session && (needsSetup || !!state.settingUp));
   open.textContent = session ? "Show desktop" : "Open desktop";
   $("close").hidden = !session;
-  $("later").hidden = !session;
 
   document.querySelector('[data-menu="resolution"] span').textContent = resolutionLabel(settings.resolution);
   document.querySelector('[data-menu="dpi"] span').textContent = scaleLabel(settings.dpi);
+  document.querySelector('[data-menu="bitrate"] span').textContent = bitrateLabel(settings.bitrate);
   for (const item of document.querySelectorAll("[data-toggle]")) {
     item.querySelector(".switch").classList.toggle("on", !!settings[item.dataset.toggle]);
   }
@@ -79,6 +99,7 @@ function render(next) {
 
 $("open").onclick = () => send(state.session ? "show" : "open");
 $("close").onclick = () => send("close");
+$("setup").onclick = () => send(state.setup === "restart" ? "restartDevice" : "setupDevice");
 $("usb-setup").onclick = () => send("setupUsb");
 for (const item of document.querySelectorAll("[data-toggle]")) {
   item.onclick = () => {
@@ -114,6 +135,8 @@ function showMenu(button) {
         const here = w === screenSize[0] && h === screenSize[1];
         return [value, resolutionLabel(value), here ? "This screen" : ""];
       })
+    : kind === "bitrate"
+    ? BITRATES.map(([mbits, extra]) => [String(mbits), bitrateLabel(mbits), extra])
     : SCALES.map(([dpi, label]) => [String(dpi), label, dpi === 160 ? "Default" : ""]);
   const current = String(state.settings[kind]);
   menu.innerHTML = "";
@@ -122,7 +145,7 @@ function showMenu(button) {
     option.className = "option" + (value === current ? " chosen" : "");
     option.innerHTML = `${CHECK}<span>${label}</span>` + (extra ? `<span class="extra">${extra}</span>` : "");
     option.onclick = () => {
-      state.settings[kind] = kind === "dpi" ? Number(value) : value;
+      state.settings[kind] = kind === "resolution" ? value : Number(value);
       render(state);
       send(`set ${kind} ${value}`);
       closeMenu();

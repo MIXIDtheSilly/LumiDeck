@@ -9,6 +9,7 @@ mod adb;
 mod audio;
 mod clipboard;
 mod decoder;
+mod device_setup;
 mod keyboard;
 mod protocol;
 mod render;
@@ -52,6 +53,10 @@ Usage: lumideck [options]
   --no-audio            Leave the sound on the device
   --link <auto|usb|adb> Straight over USB, or through ADB (default auto: USB once it's
                         set up)
+  --setup-device        Install LumiDeck on the device (lumideck.apk, next to this
+                        program) and set it up, or update it
+  --device-status       Print how far the device is set up: ready, install, update,
+                        setup, restart or unsupported
   --setup-usb           Set the PC up for the USB link, once (needs an administrator)
   --usb-ready           Exit with 0 if the PC is set up for the USB link, 1 if not
   --stats               Print how fast video goes, every few seconds
@@ -75,6 +80,8 @@ struct Args {
     bitrate: u32,
     audio: bool,
     link: Link,
+    setup_device: bool,
+    device_status: bool,
     setup_usb: bool,
     usb_ready: bool,
     stats: bool,
@@ -93,6 +100,8 @@ impl Args {
             bitrate: 15,
             audio: true,
             link: Link::Auto,
+            setup_device: false,
+            device_status: false,
             setup_usb: false,
             usb_ready: false,
             stats: false,
@@ -122,6 +131,8 @@ impl Args {
                         other => bail!("--link is auto, usb or adb, not {other}"),
                     }
                 }
+                "--setup-device" => args.setup_device = true,
+                "--device-status" => args.device_status = true,
                 "--setup-usb" => args.setup_usb = true,
                 "--usb-ready" => args.usb_ready = true,
                 "--stats" => args.stats = true,
@@ -168,6 +179,13 @@ fn run() -> Result<()> {
     let adb = Adb::connect(args.serial.clone())?;
     if args.setup_usb {
         return usb_setup::run(&adb);
+    }
+    if args.device_status {
+        println!("{}", device_setup::status(&adb)?.name());
+        return Ok(());
+    }
+    if args.setup_device {
+        return device_setup::run(&adb);
     }
     adb.prepare()?;
 

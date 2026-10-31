@@ -59,6 +59,13 @@ if (-not $Scrcpy) {
     } elseif (-not (Test-Path $exe)) {
         throw 'Building the client needs Rust. Install it with: winget install --id Rustlang.Rustup -e'
     }
+    # The Android app last built, which the LumiDeck app installs on the device from next
+    # to the client ("Set up" or "Update"), as the installer has it.
+    $apk = Join-Path $LumiRoot 'android\app\build\outputs\apk\release\app-release.apk'
+    $bundled = Join-Path (Split-Path $exe) 'lumideck.apk'
+    if ((Test-Path $apk) -and (-not (Test-Path $bundled) -or (Get-Item $apk).LastWriteTime -gt (Get-Item $bundled).LastWriteTime)) {
+        Copy-Item $apk $bundled
+    }
     if ($SetupUsb) {
         $setupArgs = @('--setup-usb')
         if ($Serial) { $setupArgs += '--serial', $Serial }

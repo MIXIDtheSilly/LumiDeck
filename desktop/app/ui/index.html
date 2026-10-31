@@ -78,16 +78,11 @@
 
   /* The device: a banner on the logo's gradient */
   .hero {
-    position: relative; overflow: hidden; border-radius: 28px; padding: 18px 18px 18px 20px;
+    position: relative; overflow: hidden; border-radius: 28px; padding: 18px 18px 18px 26px;
     display: flex; align-items: center; gap: 18px; color: var(--light);
     background: linear-gradient(110deg, var(--night) 0%, var(--slate) 30%, var(--teal) 68%, var(--mist) 135%);
   }
   .hero .mark { position: absolute; right: -40px; top: -70px; width: 240px; height: 240px; opacity: .07; pointer-events: none; }
-  .badge {
-    width: 56px; height: 56px; border-radius: 18px; flex: none; display: grid; place-items: center;
-    background: rgba(234, 242, 243, .12); position: relative;
-  }
-  .badge svg.icon { width: 28px; height: 28px; stroke-width: 1.6; }
   .about { flex: 1; min-width: 0; position: relative; }
   .heading { display: flex; align-items: center; gap: 12px; min-width: 0; }
   .device { font: 600 24px/1.2 var(--display); letter-spacing: -.2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -99,10 +94,14 @@
   @keyframes pulse { 50% { box-shadow: 0 0 0 5px rgba(143, 227, 176, .18); } }
   .meta { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 14px; margin-top: 5px; font-size: 13.5px; color: rgba(234, 242, 243, .72); }
   .battery { display: inline-flex; align-items: center; gap: 6px; color: var(--light); }
-  .battery svg { width: 22px; height: 13px; }
+  .battery svg { width: 24px; height: 14px; }
   .error {
     margin-top: 10px; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4;
     background: rgba(255, 180, 169, .14); color: var(--warning);
+  }
+  .notice {
+    margin-top: 10px; padding: 8px 12px; border-radius: 12px; font-size: 13px; line-height: 1.4;
+    background: rgba(234, 242, 243, .12); color: var(--light);
   }
   .actions { display: flex; gap: 8px; flex: none; position: relative; }
 
@@ -125,7 +124,6 @@
   /* Settings: two columns when there's room */
   .sections { display: grid; grid-template-columns: repeat(auto-fit, minmax(400px, 1fr)); column-gap: 16px; align-items: start; }
   h2 { font-size: 14px; font-weight: 600; color: var(--primary); margin: 20px 20px 8px; letter-spacing: .2px; }
-  .note { font-size: 13px; color: var(--dim); margin: -4px 20px 10px; }
 
   /* Grouped lists: rounded at the group's ends, nearly square between items */
   .group { display: flex; flex-direction: column; gap: 2px; }
@@ -219,16 +217,17 @@
 <div class="page"><div class="inner">
   <section id="hero" class="hero">
     <svg class="mark" viewBox="0 0 750 750"><path fill="#EAF2F3" d="M0,78 A78,78 0 0 1 78,0 H272 A78,78 0 0 1 350,78 V320 A80,80 0 0 0 430,400 H672 A78,78 0 0 1 750,478 V672 A78,78 0 0 1 672,750 H78 A78,78 0 0 1 0,672 Z M400,78 A78,78 0 0 1 478,0 H672 A78,78 0 0 1 750,78 V272 A78,78 0 0 1 672,350 H438 A38,38 0 0 1 400,312 Z"/></svg>
-    <div class="badge"><svg class="icon" viewBox="0 0 24 24"><rect x="2.5" y="6" width="19" height="12" rx="3"/><path d="M6.5 12h3M8 10.5v3"/><circle cx="16" cy="11" r=".9"/><circle cx="17.5" cy="13.5" r=".9"/></svg></div>
     <div class="about">
       <div class="heading">
         <div id="device" class="device">Plug in your device</div>
         <div id="status" class="status" hidden><span class="dot"></span>Desktop open</div>
       </div>
       <div id="meta" class="meta"></div>
+      <div id="notice" class="notice" hidden></div>
       <div id="error" class="error" hidden></div>
     </div>
     <div class="actions">
+      <button id="setup" class="btn ghost" hidden></button>
       <button id="close" class="btn ghost" hidden>Close</button>
       <button id="open" class="btn light" disabled>Open desktop</button>
     </div>
@@ -237,7 +236,6 @@
   <div class="sections">
     <div>
       <h2>Display</h2>
-      <p id="later" class="note" hidden>Changes apply the next time the desktop opens.</p>
       <div class="group">
         <div class="item">
           <div class="lead"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8M12 16v4"/></svg></div>
@@ -248,6 +246,11 @@
           <div class="lead"><span class="aa">Aa</span></div>
           <div class="text"><div class="title">Scale</div><div class="sub">How big text and icons are</div></div>
           <button class="select" data-menu="dpi"><span></span><svg class="icon" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
+        </div>
+        <div class="item">
+          <div class="lead"><svg class="icon" viewBox="0 0 24 24"><path d="M4.5 17a8.5 8.5 0 1 1 15 0"/><path d="M12 13.5l3.5-4"/><circle cx="12" cy="14" r="1.3"/></svg></div>
+          <div class="text"><div class="title">Bitrate</div><div class="sub">Higher is sharper, lower is smoother</div></div>
+          <button class="select" data-menu="bitrate"><span></span><svg class="icon" viewBox="0 0 24 24"><path d="M7 10l5 5 5-5"/></svg></button>
         </div>
         <button class="item" data-toggle="fullscreen">
           <div class="lead"><svg class="icon" viewBox="0 0 24 24"><path d="M4 9V4h5M15 4h5v5M20 15v5h-5M9 20H4v-5"/></svg></div>
