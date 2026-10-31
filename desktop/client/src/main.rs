@@ -10,7 +10,9 @@ mod audio;
 mod clipboard;
 mod decoder;
 mod device_setup;
+mod files;
 mod keyboard;
+mod placement;
 mod protocol;
 mod render;
 mod usb;
@@ -35,6 +37,7 @@ use winit::window::{CursorGrabMode, CursorIcon, CustomCursor, Fullscreen, Icon, 
 
 use crate::adb::Adb;
 use crate::keyboard::Shortcut;
+use crate::placement::Placement;
 use crate::protocol::{Button, Control};
 use crate::render::Fit;
 use crate::video::{Header, WindowSize};
@@ -155,6 +158,8 @@ enum UserEvent {
     Shortcut(Shortcut),
     /// An app on the device took the mouse for itself, or let it go (see protocol::POINTER_CAPTURE).
     PointerCapture(bool),
+    /// What the title says after "LumiDeck", such as how copying dropped files went.
+    Status(Option<String>),
     /// The session ended, with why if it wasn't the user.
     Ended(Option<String>),
 }
@@ -258,6 +263,10 @@ fn run() -> Result<()> {
     if let Some(sound) = sound {
         audio::spawn(sound);
     }
+    let proxy = event_loop.create_proxy();
+    let files = files::spawn(adb.clone(), move |status| {
+        let _ = proxy.send_event(UserEvent::Status(status));
+    });
 
     let mut app = App {
         args,
@@ -265,6 +274,7 @@ fn run() -> Result<()> {
         video_queue: Some(video_queue),
         video_events,
         controls,
+        files,
         proxy: event_loop.create_proxy(),
         window: None,
         size: Arc::new(WindowSize::default()),
@@ -272,6 +282,7 @@ fn run() -> Result<()> {
         captured: false,
         grabbed: false,
         blank_cursor: None,
+        placement: None,
         result: Ok(()),
     };
     event_loop.run_app(&mut app)?;
@@ -345,6 +356,8 @@ struct App {
     video_queue: Option<Receiver<video::Event>>,
     video_events: Sender<video::Event>,
     controls: Sender<Control>,
+    /// Files dropped on the window, to copy to the device.
+    files: Sender<std::path::PathBuf>,
     proxy: EventLoopProxy<UserEvent>,
     window: Option<Window>,
     size: Arc<WindowSize>,
@@ -355,6 +368,8 @@ struct App {
     grabbed: bool,
     /// A pointer with nothing to see, for while the mouse is held.
     blank_cursor: Option<CustomCursor>,
+    /// Where the window was last shown in a window, to open there next time.
+    placement: Option<Placement>,
     result: Result<()>,
 }
 
@@ -430,6 +445,22 @@ impl App {
         }
         let mut attributes =
             Window::default_attributes().with_title("LumiDeck").with_inner_size(size).with_window_icon(icon());
+        // Where it was last time, if that's still on a screen.
+        let saved = placement::load().filter(|p| {
+            event_loop.available_monitors().any(|monitor| {
+                let (at, size) = (monitor.position(), monitor.size());
+                // Enough of the title bar to grab it by.
+                let (x, y) = (p.x + 100, p.y + 20);
+                x >= at.x && y >= at.y && x < at.x + size.width as i32 && y < at.y + size.height as i32
+            })
+        });
+        if let Some(p) = saved {
+            attributes = attributes
+                .with_position(PhysicalPosition::new(p.x, p.y))
+                .with_inner_size(PhysicalSize::new(p.width, p.height))
+                .with_maximized(p.maximized);
+        }
+        self.placement = saved;
         if self.args.fullscreen {
             attributes = attributes.with_fullscreen(Some(Fullscreen::Borderless(None)));
         }
@@ -467,6 +498,29 @@ impl App {
         self.window = Some(window);
         Ok(())
     }
+
+    /// Notes where the window is, while it's in a window: not fullscreen or minimised.
+    fn track_placement(&mut self) {
+        let Some(window) = &self.window else { return };
+        if window.fullscreen().is_some() || window.is_minimized() == Some(true) {
+            return;
+        }
+        let maximized = window.is_maximized();
+        let mut placement = self.placement.unwrap_or(Placement { x: 0, y: 0, width: 0, height: 0, maximized });
+        placement.maximized = maximized;
+        // A maximised window keeps where it was before, to go back to.
+        if !maximized && let Ok(position) = window.outer_position() {
+            let size = window.inner_size();
+            if size.width == 0 || size.height == 0 {
+                return;
+            }
+            (placement.x, placement.y, placement.width, placement.height) =
+                (position.x, position.y, size.width, size.height);
+        }
+        if placement.width > 0 {
+            self.placement = Some(placement);
+        }
+    }
 }
 
 impl ApplicationHandler<UserEvent> for App {
@@ -479,12 +533,23 @@ impl ApplicationHandler<UserEvent> for App {
         }
     }
 
+    fn exiting(&mut self, _event_loop: &ActiveEventLoop) {
+        if let Some(placement) = self.placement {
+            placement::save(placement);
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
             WindowEvent::Resized(size) => {
                 self.size.set(size.width, size.height);
                 let _ = self.video_events.send(video::Event::Redraw);
+                self.track_placement();
+            }
+            WindowEvent::Moved(_) => self.track_placement(),
+            WindowEvent::DroppedFile(path) => {
+                let _ = self.files.send(path);
             }
             WindowEvent::RedrawRequested => {
                 let _ = self.video_events.send(video::Event::Redraw);
@@ -556,6 +621,14 @@ impl ApplicationHandler<UserEvent> for App {
                     self.release();
                 } else if self.window.as_ref().is_some_and(Window::has_focus) {
                     self.grab();
+                }
+            }
+            UserEvent::Status(status) => {
+                if let Some(window) = &self.window {
+                    window.set_title(&match status {
+                        Some(status) => format!("LumiDeck · {status}"),
+                        None => "LumiDeck".to_string(),
+                    });
                 }
             }
             UserEvent::Ended(error) => {
